@@ -95,6 +95,7 @@ bridge.on("message", async (message) => {
     await saveState({ phase: "finish_proposed_by_peer", finishSummary: message.text });
   } else if (message.kind === "finish_accept") {
     await saveState({ phase: "finished", peerFinishAccepted: true });
+    await bridge.close();
   } else if (message.kind === "finish_reject") {
     await saveState({ phase: "active", peerFinishAccepted: false });
   }
@@ -202,6 +203,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   const timeoutMs = Number(args.timeout_seconds || 3600) * 1000;
   await bridge.log.write("tool_called", { tool: params.name, arguments: args });
   try {
+    if (params.name === "peer_status" && state.phase === "finished") {
+      return result(JSON.stringify({ ...bridge.status(), session: state }, null, 2), {
+        ...bridge.status(),
+        session: state,
+      });
+    }
     await bridge.connect();
     if (params.name === "peer_status") {
       return result(JSON.stringify({ ...bridge.status(), session: state }, null, 2), {
@@ -291,6 +298,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         metadata: { displayName: config.displayName },
       });
       await saveState({ phase: accepted ? "finished" : "active", localFinishAccepted: accepted });
+      if (accepted) await bridge.close();
       return result(accepted ? "Разговор завершён по взаимному согласию." : "Продолжение разговора подтверждено.", { session: state });
     }
 

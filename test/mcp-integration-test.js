@@ -174,7 +174,10 @@ try {
 
   const status = await alice.client.callTool({ name: "peer_status", arguments: {} });
   assert.match(textOf(status), /finished/);
-  console.log("MCP PASS: stdio tools, blocking exchange, Claude push channel, goal and finish handshakes verified");
+  assert.equal(status.structuredContent.connected, false);
+  const bobStatus = await bob.client.callTool({ name: "peer_status", arguments: {} });
+  assert.equal(bobStatus.structuredContent.connected, false);
+  console.log("MCP PASS: stdio tools, blocking exchange, Claude push channel, goal, finish, and auto-disconnect verified");
 } finally {
   await Promise.allSettled([alice?.client.close(), bob?.client.close()]);
   relay.kill("SIGTERM");
