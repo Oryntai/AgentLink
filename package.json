@@ -1,0 +1,24 @@
+{
+  "name": "agent-link",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Encrypted peer-to-peer conversation bridge for local Codex and Claude sessions.",
+  "scripts": {
+    "relay": "node src/relay-server.js",
+    "mcp": "node src/mcp-server.js",
+    "create-room": "node scripts/configure.js create",
+    "join-room": "node scripts/configure.js join",
+    "install-mcp": "node scripts/install-mcp.js",
+    "report": "node scripts/report.js",
+    "smoke": "node test/smoke-test.js && node test/mcp-integration-test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "ws": "^8.18.3",
+    "zod": "^3.25.76"
+  }
+}

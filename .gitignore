@@ -1,0 +1,7 @@
+node_modules/
+.agent-link/
+logs/
+data/
+*.log
+.env
+
