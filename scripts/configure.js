@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRoomCode, parseRoomCode } from "../src/crypto.js";
+import { createIdentity, createRoomCode, parseRoomCode } from "../src/crypto.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const [command, ...rawArgs] = process.argv.slice(2);
@@ -50,6 +50,8 @@ const config = {
   displayName: args.name || args.agent,
   role: command === "create" ? "initiator" : "responder",
   channelMode: args.channel === "true",
+  identity: createIdentity(),
+  expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString(),
   logDir: path.join("logs", args.agent),
 };
 

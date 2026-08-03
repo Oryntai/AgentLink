@@ -6,7 +6,17 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { BridgeClient } from "../src/bridge-client.js";
-import { createRoomCode, parseRoomCode } from "../src/crypto.js";
+import { decryptLogRecord } from "../src/log-crypto.js";
+import {
+  createIdentity,
+  createRoomCode,
+  encryptPayload,
+  identityProof,
+  parseRoomCode,
+  signEnvelope,
+  verifyIdentityProof,
+  verifyEnvelope,
+} from "../src/crypto.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -57,6 +67,7 @@ const aliceConfig = {
   agentId: "alice-codex",
   displayName: "Alice Codex",
   role: "initiator",
+  identity: createIdentity(),
 };
 const bobConfig = {
   ...base,
@@ -64,7 +75,44 @@ const bobConfig = {
   agentId: "bob-claude",
   displayName: "Bob Claude",
   role: "responder",
+  identity: createIdentity(),
 };
+
+const signedEnvelope = {
+  version: 2,
+  id: "signature-test",
+  roomId,
+  from: aliceConfig.agentId,
+  to: bobConfig.agentId,
+  sentAt: new Date().toISOString(),
+};
+signedEnvelope.encrypted = encryptPayload(roomId, secret, { kind: "chat", text: "signed" }, signedEnvelope);
+signedEnvelope.signature = signEnvelope(aliceConfig.identity.privateKey, signedEnvelope);
+assert.equal(verifyEnvelope(aliceConfig.identity.publicKey, signedEnvelope), true);
+assert.equal(
+  verifyEnvelope(aliceConfig.identity.publicKey, { ...signedEnvelope, from: "forged-agent" }),
+  false,
+);
+const aliceProof = identityProof(
+  roomId,
+  secret,
+  aliceConfig.agentId,
+  aliceConfig.identity.publicKey,
+);
+assert.equal(
+  verifyIdentityProof(
+    roomId,
+    secret,
+    aliceConfig.agentId,
+    aliceConfig.identity.publicKey,
+    aliceProof,
+  ),
+  true,
+);
+assert.equal(
+  verifyIdentityProof(roomId, secret, "forged-agent", aliceConfig.identity.publicKey, aliceProof),
+  false,
+);
 
 const relay = spawn(process.execPath, [path.join(rootDir, "src", "relay-server.js")], {
   cwd: rootDir,
@@ -142,15 +190,34 @@ try {
   const finished = await alice.wait({ kinds: ["finish_accept"], timeoutMs: 2_000 });
   assert.equal(finished.kind, "finish_accept");
 
+  await alice.send(`Секрет не должен попасть в лог: ${roomCode}`, {
+    kind: "chat",
+    metadata: { displayName: "Alice Codex" },
+  });
+  const redactedMessage = await bobReconnected.wait({ kinds: ["chat"], timeoutMs: 2_000 });
+  assert.match(redactedMessage.text, /Секрет не должен/);
+
+  const replacement = new BridgeClient(aliceConfig);
+  await replacement.connect();
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(alice.status().superseded, true);
+  assert.equal(replacement.status().connected, true);
+  await replacement.close();
+
   await new Promise((resolve) => setTimeout(resolve, 150));
   await Promise.all([alice.log.flush(), bobReconnected.log.flush()]);
   const aliceLog = await readFile(alice.log.filePath, "utf8");
+  const decryptedAliceLog = aliceLog
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => decryptLogRecord(aliceConfig.identity.privateKey, JSON.parse(line)));
   const relayState = await readFile(dataFile, "utf8");
-  assert.match(aliceLog, /Как назовём компонент/);
+  assert.doesNotMatch(aliceLog, /Как назовём компонент/);
+  assert.match(JSON.stringify(decryptedAliceLog), /Как назовём компонент/);
   assert.doesNotMatch(aliceLog, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(relayState, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
-  console.log("SMOKE PASS: encrypted relay, simultaneous exchange, offline queue, completion, and logs verified");
+  console.log("SMOKE PASS: encryption, simultaneous exchange, offline queue, completion, redaction, and single-owner reconnect verified");
   console.log(`TEST_LOG_DIR=${path.join(tempDir, "logs")}`);
 } finally {
   await Promise.allSettled([alice?.close(), bob?.close(), bobReconnected?.close()]);

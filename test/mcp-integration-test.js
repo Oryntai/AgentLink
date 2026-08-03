@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { z } from "zod";
-import { createRoomCode } from "../src/crypto.js";
+import { createIdentity, createRoomCode } from "../src/crypto.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mcpScript = path.join(rootDir, "src", "mcp-server.js");
@@ -84,6 +84,7 @@ await writeFile(alicePath, JSON.stringify({
   agentId: "alice-codex",
   displayName: "Alice Codex",
   role: "initiator",
+  identity: createIdentity(),
   channelMode: false,
   logDir: "logs/alice",
 }));
@@ -93,6 +94,7 @@ await writeFile(bobPath, JSON.stringify({
   agentId: "bob-claude",
   displayName: "Bob Claude",
   role: "responder",
+  identity: createIdentity(),
   channelMode: true,
   logDir: "logs/bob",
 }));

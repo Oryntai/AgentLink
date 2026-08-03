@@ -5,11 +5,13 @@
 ## Что уже работает
 
 - E2E-зашифрованная передача через WebSocket relay.
+- Ed25519-подпись каждого envelope, доказательство публичного ключа через секрет комнаты и локальный pinning peer.
 - `peer_exchange`: отправить реплику и приостановить текущий Codex turn до ответа.
 - Claude Code channel: входящее сообщение само будит idle/background-сессию.
 - Обязательное согласование цели и взаимное завершение.
 - Очередь при потере связи и доставка после переподключения.
-- Локальный расшифрованный JSONL-журнал; relay хранит только ciphertext.
+- Чувствительные поля локального JSONL-журнала зашифрованы; relay хранит только ciphertext.
+- TTL/quota/rate limit на relay, ротация логов и новый room secret для каждой сессии.
 
 ## Первый локальный тест
 
@@ -49,6 +51,13 @@ claude --dangerously-load-development-channels server:agent-link
 
 ## Промпты для теста
 
+Перед новым разговором создать свежий room secret и сбросить только протокольное состояние (старые логи сохраняются):
+
+```powershell
+npm run new-session
+./scripts/start-relay.ps1
+```
+
 Codex, инициатор:
 
 ```text
@@ -78,7 +87,7 @@ ws://100.x.y.z:8787/ws
 Логи находятся рядом с локальной конфигурацией:
 
 ```text
-D:\AgentLink\.agent-link\logs\<agent>\<room>-<agent>.jsonl
+D:\AgentLink\.agent-link\logs\<agent>\<room>-<agent>-<pid>.jsonl
 ```
 
 Собрать читаемый отчёт:
@@ -89,7 +98,7 @@ npm run report:all
 npm run doctor
 ```
 
-Отчёт появится в `.agent-link\reports`. Секрет комнаты в логи не записывается.
+Отчёт появится в `.agent-link\reports`. Он расшифровывает сообщения только по явной команде; исходные JSONL не содержат открытого текста разговора или секрета комнаты.
 
 Остановить локальный relay:
 
@@ -103,4 +112,4 @@ npm run doctor
 npm run smoke
 ```
 
-Тест проверяет шифрование, одновременный обмен, offline-очередь, переподключение, MCP STDIO, блокирующий Codex exchange, Claude push channel, цель и взаимное завершение.
+Тест проверяет шифрование, подписи и proof ключей, одновременный обмен, offline-очередь, единственного владельца соединения, MCP STDIO, блокирующий Codex exchange, Claude push channel, цель и взаимное завершение.

@@ -17,6 +17,12 @@ export async function loadBridgeConfig(explicitPath) {
   if (!['initiator', 'responder'].includes(config.role)) {
     throw new Error("role must be initiator or responder");
   }
+  if (!config.identity?.publicKey || !config.identity?.privateKey) {
+    throw new Error(`Missing Ed25519 identity in ${configPath}; recreate or migrate this AgentLink config`);
+  }
+  if (config.expiresAt && Date.parse(config.expiresAt) <= Date.now()) {
+    throw new Error(`AgentLink session expired at ${config.expiresAt}; create a new room`);
+  }
   const { roomId, secret } = parseRoomCode(config.roomCode);
   return {
     ...config,

@@ -39,7 +39,10 @@ await check("Claude Desktop config", async () => {
 
 await check("Local participant configs", async () => {
   const files = (await readdir(configDir)).filter(
-    (name) => name.endsWith(".json") && !name.endsWith(".state.json"),
+    (name) =>
+      name.endsWith(".json") &&
+      !name.endsWith(".state.json") &&
+      !name.endsWith(".trust.json"),
   );
   if (files.length < 2) throw new Error(`expected 2, found ${files.length}`);
   const summaries = [];

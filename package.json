@@ -10,6 +10,8 @@
     "create-room": "node scripts/configure.js create",
     "join-room": "node scripts/configure.js join",
     "install-mcp": "node scripts/install-mcp.js",
+    "migrate-identity": "node scripts/migrate-identity.js",
+    "new-session": "node scripts/new-session.js",
     "report": "node scripts/report.js",
     "report:all": "node scripts/report-all.js",
     "doctor": "node scripts/doctor.js",

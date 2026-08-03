@@ -202,6 +202,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   const timeoutMs = Number(args.timeout_seconds || 3600) * 1000;
   await bridge.log.write("tool_called", { tool: params.name, arguments: args });
   try {
+    await bridge.connect();
     if (params.name === "peer_status") {
       return result(JSON.stringify({ ...bridge.status(), session: state }, null, 2), {
         ...bridge.status(),
@@ -311,7 +312,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
 const transport = new StdioServerTransport();
 await mcp.connect(transport);
 mcpReady = true;
-void bridge.start();
+if (config.channelMode) void bridge.start();
 
 process.on("SIGINT", async () => {
   await bridge.close();
