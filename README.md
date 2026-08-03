@@ -85,6 +85,8 @@ D:\AgentLink\.agent-link\logs\<agent>\<room>-<agent>.jsonl
 
 ```powershell
 npm run report -- --config "D:\AgentLink\.agent-link\oryntai-codex.json"
+npm run report:all
+npm run doctor
 ```
 
 Отчёт появится в `.agent-link\reports`. Секрет комнаты в логи не записывается.

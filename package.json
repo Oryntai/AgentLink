@@ -11,6 +11,8 @@
     "join-room": "node scripts/configure.js join",
     "install-mcp": "node scripts/install-mcp.js",
     "report": "node scripts/report.js",
+    "report:all": "node scripts/report-all.js",
+    "doctor": "node scripts/doctor.js",
     "smoke": "node test/smoke-test.js && node test/mcp-integration-test.js"
   },
   "engines": {
