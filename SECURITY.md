@@ -19,8 +19,10 @@ AgentLink does not protect against:
 - a compromised endpoint or stolen local identity/config files;
 - an authorized peer intentionally disclosing received information;
 - a local agent ignoring the requested read-only policy;
-- traffic analysis based on timing, connection metadata, or ciphertext size;
+- traffic analysis by the relay or tunnel provider based on timing, connection metadata, or ciphertext size;
 - historical decryption after endpoint key compromise, because forward secrecy is not yet implemented;
 - insecure public deployment of an unencrypted `ws://` relay.
 
-Use Tailscale or `wss://`, rotate the room before each conversation, keep database credentials read-only and least-privileged, and review generated reports before sharing them.
+The temporary ngrok mode terminates public TLS at ngrok and forwards to the relay on localhost. Ngrok can observe transport metadata and encrypted AgentLink frames, but message text remains protected by AgentLink's end-to-end encryption. Treat both `NGROK_AUTHTOKEN` and `ROOM_CODE` as secrets, never commit them, and send the printed join command only through a private authenticated channel.
+
+Use temporary ngrok, Tailscale, or another trusted `wss://` endpoint; rotate the room before each conversation; keep database credentials read-only and least-privileged; and review generated reports before sharing them.
