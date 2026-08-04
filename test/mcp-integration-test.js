@@ -127,8 +127,8 @@ try {
     name: "peer_goal",
     arguments: {
       action: "propose",
-      goal: "Согласовать интерфейс кнопки",
-      success_criteria: ["Название", "Состояния"],
+      goal: "Agree on the button interface",
+      success_criteria: ["Name", "States"],
       timeout_seconds: 10,
     },
   });
@@ -136,23 +136,23 @@ try {
     name: "peer_goal",
     arguments: { action: "wait", timeout_seconds: 10 },
   });
-  assert.match(textOf(waitedGoal), /Согласовать интерфейс кнопки/);
+  assert.match(textOf(waitedGoal), /Agree on the button interface/);
   const accepted = await bob.client.callTool({
     name: "peer_goal",
-    arguments: { action: "accept", note: "Цель и критерии подтверждены" },
+    arguments: { action: "accept", note: "Goal and criteria accepted" },
   });
-  assert.match(textOf(accepted), /Цель подтверждена/);
-  assert.match(textOf(await propose), /подтвердил цель/);
+  assert.match(textOf(accepted), /Goal accepted/);
+  assert.match(textOf(await propose), /accepted the goal/);
 
   const aliceExchange = alice.client.callTool({
     name: "peer_exchange",
-    arguments: { message: "Как назовём компонент?", timeout_seconds: 10 },
+    arguments: { message: "What should we call the component?", timeout_seconds: 10 },
   });
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert(channelEvents.some((event) => /Как назовём компонент/.test(event.content)));
+  assert(channelEvents.some((event) => /What should we call the component/.test(event.content)));
   await bob.client.callTool({
     name: "peer_reply",
-    arguments: { message: "Назовём компонент PaymentButton" },
+    arguments: { message: "Call the component PaymentButton" },
   });
   assert.match(textOf(await aliceExchange), /PaymentButton/);
 
@@ -160,17 +160,17 @@ try {
     name: "peer_complete",
     arguments: {
       action: "propose",
-      summary: "Название и состояния согласованы",
+      summary: "The name and states are agreed",
       timeout_seconds: 10,
     },
   });
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert(channelEvents.some((event) => /предлагает завершить разговор/.test(event.content)));
+  assert(channelEvents.some((event) => /proposes ending the conversation/.test(event.content)));
   await bob.client.callTool({
     name: "peer_complete",
-    arguments: { action: "accept", note: "Подтверждаю завершение" },
+    arguments: { action: "accept", note: "Completion confirmed" },
   });
-  assert.match(textOf(await finishProposal), /подтвердил завершение/);
+  assert.match(textOf(await finishProposal), /confirmed completion/);
 
   const status = await alice.client.callTool({ name: "peer_status", arguments: {} });
   assert.match(textOf(status), /finished/);

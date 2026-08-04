@@ -99,7 +99,7 @@ async function installClaudeDesktopDirect(mcpScript, configPath) {
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.config || !args.client) {
-  console.error("Usage: node scripts/install-mcp.js --config PATH --client codex|claude");
+  console.error("Usage: node scripts/install-mcp.js --config PATH --client codex|claude|claude-desktop");
   process.exit(1);
 }
 

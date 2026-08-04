@@ -1,13 +1,29 @@
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRoomCode } from "../src/crypto.js";
+import { createRoomCode, parseRoomCode } from "../src/crypto.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configDir = path.join(rootDir, ".agent-link");
-const explicitPaths = process.argv.slice(2).map((item) => path.resolve(item));
-const configPaths = explicitPaths.length
-  ? explicitPaths
+
+function parseArgs(values) {
+  const result = { roomCode: null, paths: [] };
+  for (let index = 0; index < values.length; index += 1) {
+    if (values[index] === "--code") {
+      result.roomCode = values[++index];
+    } else if (values[index].startsWith("--")) {
+      throw new Error(`Unknown option: ${values[index]}`);
+    } else {
+      result.paths.push(path.resolve(values[index]));
+    }
+  }
+  if (result.roomCode === undefined) throw new Error("--code requires a room code");
+  return result;
+}
+
+const args = parseArgs(process.argv.slice(2));
+const configPaths = args.paths.length
+  ? args.paths
   : (await readdir(configDir))
       .filter(
         (name) =>
@@ -17,11 +33,12 @@ const configPaths = explicitPaths.length
       )
       .map((name) => path.join(configDir, name));
 
-if (configPaths.length !== 2) {
-  throw new Error("new-session expects exactly two local participant config paths");
+if (configPaths.length < 1 || configPaths.length > 2) {
+  throw new Error("new-session expects one remote participant config or two local participant configs");
 }
 
-const roomCode = createRoomCode();
+const roomCode = args.roomCode || createRoomCode();
+parseRoomCode(roomCode);
 const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString();
 const participants = [];
 for (const configPath of configPaths) {
@@ -42,5 +59,9 @@ for (const configPath of configPaths) {
 
 console.log(`New AgentLink session: ${participants.join(", ")}`);
 console.log(`Expires: ${expiresAt}`);
-console.log("Room code (share privately only when the peer is on another machine):");
-console.log(roomCode);
+if (!args.roomCode) {
+  console.log("Room code (share privately with the peer owner):");
+  console.log(roomCode);
+} else {
+  console.log("The supplied room code was installed.");
+}

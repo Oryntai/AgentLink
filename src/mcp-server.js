@@ -34,16 +34,16 @@ async function saveState(patch) {
 function naturalMessage(message) {
   const sender = message.metadata?.displayName || message.from;
   const labels = {
-    chat: `Сообщение от агента ${sender}`,
-    goal_proposal: `Предложение конечной цели от агента ${sender}`,
-    goal_accept: `Агент ${sender} подтвердил цель`,
-    goal_reject: `Агент ${sender} отклонил цель`,
-    finish_proposal: `Агент ${sender} предлагает завершить разговор`,
-    finish_accept: `Агент ${sender} подтвердил завершение`,
-    finish_reject: `Агент ${sender} отказался завершать разговор`,
-    escalation: `Агент ${sender} просит вмешательства человека`,
+    chat: `Message from agent ${sender}`,
+    goal_proposal: `Final-goal proposal from agent ${sender}`,
+    goal_accept: `Agent ${sender} accepted the goal`,
+    goal_reject: `Agent ${sender} rejected the goal`,
+    finish_proposal: `Agent ${sender} proposes ending the conversation`,
+    finish_accept: `Agent ${sender} confirmed completion`,
+    finish_reject: `Agent ${sender} rejected completion`,
+    escalation: `Agent ${sender} requests human intervention`,
   };
-  return `${labels[message.kind] || `Событие от агента ${sender}`}:\n${message.text}`;
+  return `${labels[message.kind] || `Event from agent ${sender}`}:\n${message.text}`;
 }
 
 function result(text, extra = {}) {
@@ -245,12 +245,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         throw new Error(`Cannot ${args.action} goal while phase is ${state.phase}`);
       }
       const accepted = args.action === "accept";
-      await bridge.send(args.note || (accepted ? "Цель подтверждена." : "Цель требует уточнения."), {
+      await bridge.send(args.note || (accepted ? "Goal accepted." : "The goal needs clarification."), {
         kind: accepted ? "goal_accept" : "goal_reject",
         metadata: { displayName: config.displayName },
       });
       await saveState({ phase: accepted ? "active" : "negotiating_goal", localGoalAccepted: accepted });
-      return result(accepted ? "Цель подтверждена. Можно начинать разговор." : "Отказ отправлен. Ожидайте новую формулировку цели.", { session: state });
+      return result(accepted ? "Goal accepted. The conversation may begin." : "Rejection sent. Wait for a revised goal.", { session: state });
     }
 
     if (params.name === "peer_exchange") {
@@ -271,7 +271,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         kind: "chat",
         metadata: { displayName: config.displayName },
       });
-      return result("Ответ отправлен агенту. Сессия может перейти в background и дождаться следующего channel-события.", { messageId: id });
+      return result("Reply sent. The session may return to the background and wait for the next channel event.", { messageId: id });
     }
 
     if (params.name === "peer_complete") {
@@ -293,13 +293,13 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         throw new Error(`No peer finish proposal is pending; current phase is ${state.phase}`);
       }
       const accepted = args.action === "accept";
-      await bridge.send(args.note || (accepted ? "Завершение подтверждено." : "Цель ещё не достигнута."), {
+      await bridge.send(args.note || (accepted ? "Completion confirmed." : "The goal has not been reached yet."), {
         kind: accepted ? "finish_accept" : "finish_reject",
         metadata: { displayName: config.displayName },
       });
       await saveState({ phase: accepted ? "finished" : "active", localFinishAccepted: accepted });
       if (accepted) await bridge.close();
-      return result(accepted ? "Разговор завершён по взаимному согласию." : "Продолжение разговора подтверждено.", { session: state });
+      return result(accepted ? "Conversation ended by mutual agreement." : "The conversation will continue.", { session: state });
     }
 
     if (params.name === "peer_escalate") {
@@ -307,7 +307,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         kind: "escalation",
         metadata: { displayName: config.displayName },
       });
-      return result("Запрос вмешательства отправлен.", { messageId: id });
+      return result("Human-intervention request sent.", { messageId: id });
     }
 
     throw new Error(`Unknown tool: ${params.name}`);

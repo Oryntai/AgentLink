@@ -134,68 +134,68 @@ try {
   bob = new BridgeClient(bobConfig);
   await Promise.all([alice.connect(), bob.connect()]);
 
-  await alice.send("Согласовать структуру кнопки", {
+  await alice.send("Agree on the button structure", {
     kind: "goal_proposal",
     metadata: {
       displayName: "Alice Codex",
-      successCriteria: ["Определить контракт", "Разделить задачи"],
+      successCriteria: ["Define the contract", "Split the tasks"],
     },
   });
   const proposal = await bob.wait({ kinds: ["goal_proposal"], timeoutMs: 2_000 });
-  assert.equal(proposal.text, "Согласовать структуру кнопки");
-  await bob.send("Цель подтверждена", {
+  assert.equal(proposal.text, "Agree on the button structure");
+  await bob.send("Goal accepted", {
     kind: "goal_accept",
     metadata: { displayName: "Bob Claude" },
   });
   const acceptance = await alice.wait({ kinds: ["goal_accept"], timeoutMs: 2_000 });
-  assert.equal(acceptance.text, "Цель подтверждена");
+  assert.equal(acceptance.text, "Goal accepted");
 
   const [fromBob, fromAlice] = await Promise.all([
-    alice.exchange("Как назовём компонент?", {
+    alice.exchange("What should we call the component?", {
       kind: "chat",
       metadata: { displayName: "Alice Codex" },
       timeoutMs: 2_000,
     }),
-    bob.exchange("Какие состояния кнопки нужны?", {
+    bob.exchange("Which button states do we need?", {
       kind: "chat",
       metadata: { displayName: "Bob Claude" },
       timeoutMs: 2_000,
     }),
   ]);
-  assert.equal(fromBob.text, "Какие состояния кнопки нужны?");
-  assert.equal(fromAlice.text, "Как назовём компонент?");
+  assert.equal(fromBob.text, "Which button states do we need?");
+  assert.equal(fromAlice.text, "What should we call the component?");
 
   await bob.close();
   bob = null;
   await new Promise((resolve) => setTimeout(resolve, 100));
-  await alice.send("Сообщение, отправленное пока peer offline", {
+  await alice.send("Message sent while the peer is offline", {
     kind: "chat",
     metadata: { displayName: "Alice Codex" },
   });
   bobReconnected = new BridgeClient(bobConfig);
   await bobReconnected.connect();
   const queued = await bobReconnected.wait({ kinds: ["chat"], timeoutMs: 2_000 });
-  assert.equal(queued.text, "Сообщение, отправленное пока peer offline");
+  assert.equal(queued.text, "Message sent while the peer is offline");
 
-  await alice.send("План согласован: контракт и задачи определены", {
+  await alice.send("Plan agreed: contract and tasks are defined", {
     kind: "finish_proposal",
     metadata: { displayName: "Alice Codex" },
   });
   const finish = await bobReconnected.wait({ kinds: ["finish_proposal"], timeoutMs: 2_000 });
-  assert.match(finish.text, /План согласован/);
-  await bobReconnected.send("Завершение подтверждено", {
+  assert.match(finish.text, /Plan agreed/);
+  await bobReconnected.send("Completion confirmed", {
     kind: "finish_accept",
     metadata: { displayName: "Bob Claude" },
   });
   const finished = await alice.wait({ kinds: ["finish_accept"], timeoutMs: 2_000 });
   assert.equal(finished.kind, "finish_accept");
 
-  await alice.send(`Секрет не должен попасть в лог: ${roomCode}`, {
+  await alice.send(`The secret must not appear in the log: ${roomCode}`, {
     kind: "chat",
     metadata: { displayName: "Alice Codex" },
   });
   const redactedMessage = await bobReconnected.wait({ kinds: ["chat"], timeoutMs: 2_000 });
-  assert.match(redactedMessage.text, /Секрет не должен/);
+  assert.match(redactedMessage.text, /secret must not appear/);
 
   const replacement = new BridgeClient(aliceConfig);
   await replacement.connect();
@@ -212,8 +212,8 @@ try {
     .filter(Boolean)
     .map((line) => decryptLogRecord(aliceConfig.identity.privateKey, JSON.parse(line)));
   const relayState = await readFile(dataFile, "utf8");
-  assert.doesNotMatch(aliceLog, /Как назовём компонент/);
-  assert.match(JSON.stringify(decryptedAliceLog), /Как назовём компонент/);
+  assert.doesNotMatch(aliceLog, /What should we call the component/);
+  assert.match(JSON.stringify(decryptedAliceLog), /What should we call the component/);
   assert.doesNotMatch(aliceLog, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(relayState, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 

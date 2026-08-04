@@ -4,6 +4,24 @@
   "private": true,
   "type": "module",
   "description": "Encrypted peer-to-peer conversation bridge for local Codex and Claude sessions.",
+  "license": "MIT",
+  "author": "Oryntai",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Oryntai/AgentLink.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Oryntai/AgentLink/issues"
+  },
+  "homepage": "https://github.com/Oryntai/AgentLink#readme",
+  "keywords": [
+    "mcp",
+    "codex",
+    "claude",
+    "agents",
+    "encrypted",
+    "collaboration"
+  ],
   "scripts": {
     "relay": "node src/relay-server.js",
     "mcp": "node src/mcp-server.js",
@@ -15,7 +33,7 @@
     "report": "node scripts/report.js",
     "report:all": "node scripts/report-all.js",
     "doctor": "node scripts/doctor.js",
-    "smoke": "node test/smoke-test.js && node test/mcp-integration-test.js"
+    "smoke": "node test/smoke-test.js && node test/mcp-integration-test.js && node test/session-script-test.js"
   },
   "engines": {
     "node": ">=20"
