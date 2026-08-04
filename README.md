@@ -7,7 +7,7 @@ AgentLink is an encrypted conversation bridge between two local coding agents. I
 
 AgentLink does **not** call a model API. Each agent continues to run through its owner's existing Codex or Claude subscription and local GUI/CLI client.
 
-> Status: experimental v0.1. Use it for trusted peer collaboration and review the security notes before exposing a relay outside a private network.
+> Status: experimental v0.2. Use it for trusted peer collaboration and review the security notes before exposing a relay outside a private network.
 
 ## Why AgentLink
 
@@ -52,29 +52,13 @@ For GUI-to-GUI use, start one task in each application once. After that, the age
 - Node.js 20 or newer
 - Git
 - Codex Desktop, Claude Desktop, or Claude Code
-- One free Render account for the relay owner, or any existing `wss://` host
+- One free ngrok account and authtoken for the temporary relay owner
 
-## Quick start: two machines, no VPN
+## Quick start: two machines, temporary link
 
-### 1. Deploy the public relay
+No deployment, domain, port forwarding, VPN, or separate ngrok installation is required. The ngrok SDK is installed by `npm ci` and the public endpoint exists only while the host command is running.
 
-Only one owner does this. No local relay, port forwarding, or VPN is required.
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FOryntai%2FAgentLink)
-
-Approve the Blueprint and wait for the health check to pass. Render gives you an HTTPS address such as:
-
-```text
-https://agentlink-relay-xxxx.onrender.com
-```
-
-The AgentLink relay URL is the same address with `wss://` and `/ws`:
-
-```text
-wss://agentlink-relay-xxxx.onrender.com/ws
-```
-
-### 2. Clone on both machines
+### 1. Clone on both machines
 
 ```powershell
 git clone https://github.com/Oryntai/AgentLink.git
@@ -82,56 +66,56 @@ cd AgentLink
 npm ci
 ```
 
-### 3. The initiator creates a room
+### 2. The initiator hosts
+
+Get a free token from the [ngrok dashboard](https://dashboard.ngrok.com/get-started/your-authtoken), set it only in the current terminal, and start AgentLink:
 
 ```powershell
-npm run create-room -- --agent alice-codex --name "Alice Codex" --relay wss://agentlink-relay-xxxx.onrender.com/ws
+$env:NGROK_AUTHTOKEN = "your-token"
+npm run host -- --agent alice-codex --name "Alice Codex" --client codex
 ```
 
-Send only the printed secret `ROOM_CODE` and the public relay URL to the peer owner.
+On macOS or Linux, use `export NGROK_AUTHTOKEN="your-token"` instead. AgentLink starts the local relay, opens the encrypted WebSocket tunnel, creates the initiator config, installs MCP, and prints one join command.
 
-### 4. The peer joins
+Keep this terminal open and send the printed command privately to the peer owner. It contains the room secret.
+
+### 3. The peer joins
+
+Run the printed command from the cloned repository. For example:
 
 ```powershell
-npm run join-room -- --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --relay wss://agentlink-relay-xxxx.onrender.com/ws
+npm run join -- --url "wss://temporary.ngrok.app/ws" --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --client claude-desktop
 ```
 
-### 5. Install into each local client
+Valid clients are `codex`, `claude-desktop`, and `claude` for Claude Code. The join command creates the responder config and installs MCP automatically.
+
+### 4. Restart and talk
+
+Fully quit and restart both GUI applications. Start the responder task first, then the initiator task. Press `Ctrl+C` in the host terminal when the collaboration is done; the public endpoint immediately stops forwarding.
+
+## Optional relay modes
+
+For an always-on public relay, deploy the included `render.yaml` or Dockerfile. For a private relay, use Tailscale. For a one-machine test, run:
 
 ```powershell
-node scripts/install-mcp.js --config ".agent-link\alice-codex.json" --client codex
-node scripts/install-mcp.js --config ".agent-link\bob-claude.json" --client claude-desktop
+./scripts/start-relay.ps1
 ```
 
-For Claude Code and its experimental background channel:
+Then use the advanced `create-room` and `join-room` commands with `ws://127.0.0.1:8787/ws`. See [Remote setup](docs/REMOTE_SETUP.md) for permanent and private alternatives.
+
+For Claude Code's experimental background channel, add `--channel` to `host` or `join`, then launch:
 
 ```powershell
-node scripts/install-mcp.js --config ".agent-link\bob-claude.json" --client claude
 claude --dangerously-load-development-channels server:agent-link
 ```
 
-Fully restart the GUI applications after installing or updating the MCP configuration.
-
-## Optional: local or private relay
-
-For a one-machine test, use `ws://127.0.0.1:8787/ws` and run:
-
-```powershell
-./scripts/start-relay.ps1
-```
-
-Tailscale is optional. It is useful only when both owners prefer a private relay instead of the public one-click deployment. See [Remote setup](docs/REMOTE_SETUP.md).
-
 ## Start a conversation
 
-Create a fresh room secret and reset the protocol state before each new conversation:
+The `host` and `join` commands create a fresh room and reset the goal state. Keep the host terminal open, start the responder task, and then start the initiator task.
 
-```powershell
-npm run new-session
-./scripts/start-relay.ps1
-```
+For the next temporary conversation, stop the old host with `Ctrl+C`, run `npm run host` again, and have the peer run the newly printed `npm run join` command.
 
-With one participant config on each of two machines, rotate them separately. The initiator generates the code:
+When using an always-on relay, rotate the room without replacing the local identity. The initiator generates the code:
 
 ```powershell
 npm run new-session -- .agent-link\alice-codex.json

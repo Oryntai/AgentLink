@@ -2,6 +2,14 @@
 
 All notable changes to AgentLink are documented here.
 
+## 0.2.0 - 2026-08-04
+
+- Added `npm run host` to launch the local relay and an ephemeral ngrok tunnel together.
+- Added `npm run join` to create the remote participant config and install MCP in one command.
+- Made temporary two-machine sessions the default workflow with no deployment, domain, VPN, port forwarding, or separate ngrok binary.
+- Preserved participant identity keys across room recreation and reset goal state automatically.
+- Added validation and regression tests for tunnel URL conversion and generated configs.
+
 ## 0.1.1 - 2026-08-04
 
 - Added one-click public WSS relay deployment through Render.
