@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createIdentity, parseRoomCode } from "../src/crypto.js";
 
@@ -20,6 +20,9 @@ export function parseNamedArgs(values) {
 export function validateAgentId(agentId) {
   if (!agentId || !/^[A-Za-z0-9_-]{2,64}$/.test(agentId)) {
     throw new Error("--agent is required and may contain only letters, digits, _ and -");
+  }
+  if (agentId.toLowerCase() === "active") {
+    throw new Error("--agent active is reserved for the permanent MCP config");
   }
   return agentId;
 }
@@ -64,6 +67,26 @@ export function redactSecret(value, secret) {
   return secret ? text.split(secret).join("[REDACTED]") : text;
 }
 
+async function writePrivateJson(filePath, value) {
+  const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  await writeFile(temporaryPath, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+  await rename(temporaryPath, filePath);
+}
+
+export function initialSessionState() {
+  return { phase: "negotiating_goal", goal: null, successCriteria: [] };
+}
+
+export async function activateParticipantConfig({ configDir, config }) {
+  const activeConfigPath = path.join(configDir, "active.json");
+  const { roomId } = parseRoomCode(config.roomCode);
+  const activeStatePath = `${activeConfigPath}.${roomId}.state.json`;
+  await mkdir(configDir, { recursive: true });
+  await writePrivateJson(activeStatePath, initialSessionState());
+  await writePrivateJson(activeConfigPath, config);
+  return { activeConfigPath, activeStatePath };
+}
+
 export async function writeParticipantConfig({
   configDir,
   relayUrl,
@@ -98,14 +121,15 @@ export async function writeParticipantConfig({
     logDir: path.join("logs", agentId),
   };
   const statePath = `${configPath}.state.json`;
+  const initialState = initialSessionState();
   await mkdir(configDir, { recursive: true });
-  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  await writeFile(
-    statePath,
-    `${JSON.stringify({ phase: "negotiating_goal", goal: null, successCriteria: [] }, null, 2)}\n`,
-    { mode: 0o600 },
-  );
-  return { config, configPath, statePath };
+  await writePrivateJson(configPath, config);
+  await writePrivateJson(statePath, initialState);
+  const { activeConfigPath, activeStatePath } = await activateParticipantConfig({
+    configDir,
+    config,
+  });
+  return { config, configPath, statePath, activeConfigPath, activeStatePath };
 }
 
 export function installMcp({ rootDir, configPath, client }) {

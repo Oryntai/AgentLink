@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -9,12 +10,19 @@ import {
 import { BridgeClient } from "./bridge-client.js";
 import { loadBridgeConfig } from "./config.js";
 
-const config = await loadBridgeConfig(process.argv[2]);
-const stateFile = `${config.configPath}.state.json`;
-let state = await loadState();
+const configPath = path.resolve(
+  process.argv[2] || process.env.AGENT_LINK_CONFIG || ".agent-link/active.json",
+);
+let activeContext = null;
+let lastReloadError = null;
 let mcpReady = false;
+let reloadQueue = Promise.resolve();
+const configuredOpenRequestLimit = Number(process.env.AGENT_LINK_MAX_OPEN_REQUESTS || 500);
+const maxOpenRequests = Number.isInteger(configuredOpenRequestLimit) && configuredOpenRequestLimit > 0
+  ? configuredOpenRequestLimit
+  : 500;
 
-async function loadState() {
+async function loadState(stateFile) {
   try {
     return JSON.parse(await readFile(stateFile, "utf8"));
   } catch (error) {
@@ -23,24 +31,32 @@ async function loadState() {
   }
 }
 
-async function saveState(patch) {
-  state = { ...state, ...patch, updatedAt: new Date().toISOString() };
-  await mkdir(path.dirname(stateFile), { recursive: true });
-  const tmp = `${stateFile}.tmp`;
-  await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
-  await rename(tmp, stateFile);
+async function saveState(context, patch) {
+  if (context !== activeContext) throw new Error("AgentLink configuration changed during this operation");
+  context.state = { ...context.state, ...patch, updatedAt: new Date().toISOString() };
+  const snapshot = context.state;
+  const operation = context.stateSaveQueue.catch(() => {}).then(async () => {
+    await mkdir(path.dirname(context.stateFile), { recursive: true });
+    const temporaryPath = `${context.stateFile}.${process.pid}.tmp`;
+    await writeFile(temporaryPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+    await rename(temporaryPath, context.stateFile);
+  });
+  context.stateSaveQueue = operation;
+  await operation;
 }
 
 function naturalMessage(message) {
   const sender = message.metadata?.displayName || message.from;
   const labels = {
     chat: `Message from agent ${sender}`,
+    request: `Read-only request from agent ${sender}`,
+    response: `Read-only response from agent ${sender}`,
     goal_proposal: `Final-goal proposal from agent ${sender}`,
     goal_accept: `Agent ${sender} accepted the goal`,
     goal_reject: `Agent ${sender} rejected the goal`,
-    finish_proposal: `Agent ${sender} proposes ending the conversation`,
-    finish_accept: `Agent ${sender} confirmed completion`,
-    finish_reject: `Agent ${sender} rejected completion`,
+    finish_proposal: `Agent ${sender} proposes completing the current goal`,
+    finish_accept: `Agent ${sender} confirmed goal completion`,
+    finish_reject: `Agent ${sender} rejected goal completion`,
     escalation: `Agent ${sender} requests human intervention`,
   };
   return `${labels[message.kind] || `Event from agent ${sender}`}:\n${message.text}`;
@@ -60,77 +76,159 @@ function failure(error) {
   };
 }
 
+function trackOpenRequest(context, message) {
+  context.openRequests.set(message.id, message);
+  while (context.openRequests.size > maxOpenRequests) {
+    context.openRequests.delete(context.openRequests.keys().next().value);
+  }
+}
+
 const mcp = new Server(
-  { name: "agent-link", version: "0.1.0" },
+  { name: "agent-link", version: "0.3.0" },
   {
     capabilities: {
       experimental: { "claude/channel": {} },
       tools: {},
     },
     instructions:
-      "AgentLink connects this agent to one trusted peer agent. Messages are ordinary natural language. " +
-      "Before discussing work, establish and mutually accept one concrete conversation goal with peer_goal. " +
-      "For Codex-style blocking work, use peer_exchange: it sends a message and remains pending until the peer replies. " +
-      "For Claude channel mode, inbound messages arrive automatically as <channel> events; reply with peer_reply. " +
-      "The peer never receives direct access to local files, terminal, database, secrets, or tools. Read local context yourself, " +
-      "then send only the minimum textual answer. Never disclose credentials, tokens, .env contents, or unnecessary personal data. " +
-      "When the agreed goal is reached, use peer_complete and stop the conversation after mutual confirmation.",
+      "AgentLink is a persistent encrypted link to one trusted peer agent. The transport stays connected across individual goals. " +
+      "For an ad-hoc read-only question, call peer_ask and remain suspended while the peer inspects its own machine. " +
+      "To serve the peer, keep peer_listen pending; after it returns, inspect local files or databases with local read-only tools, " +
+      "call peer_respond with the request ID, then call peer_listen again. No peer receives direct machine or tool access. " +
+      "Never disclose credentials, tokens, .env contents, or unrelated data. Structured planning may still use peer_goal, " +
+      "peer_exchange, and peer_complete; completing a goal does not close the persistent transport.",
   },
 );
 
-const bridge = new BridgeClient(config);
-
-bridge.on("message", async (message) => {
-  if (message.kind === "goal_proposal") {
-    await saveState({
+async function onBridgeMessage(context, message) {
+  if (context !== activeContext) return;
+  if (message.kind === "request") {
+    trackOpenRequest(context, message);
+  } else if (message.kind === "goal_proposal") {
+    await saveState(context, {
       phase: "goal_proposed_by_peer",
       goal: message.text,
       successCriteria: message.metadata?.successCriteria || [],
     });
   } else if (message.kind === "goal_accept") {
-    await saveState({ phase: "active", peerGoalAccepted: true });
+    await saveState(context, { phase: "active", peerGoalAccepted: true });
   } else if (message.kind === "goal_reject") {
-    await saveState({ phase: "negotiating_goal", peerGoalAccepted: false });
+    await saveState(context, { phase: "negotiating_goal", peerGoalAccepted: false });
   } else if (message.kind === "finish_proposal") {
-    await saveState({ phase: "finish_proposed_by_peer", finishSummary: message.text });
+    await saveState(context, { phase: "finish_proposed_by_peer", finishSummary: message.text });
   } else if (message.kind === "finish_accept") {
-    await saveState({ phase: "finished", peerFinishAccepted: true });
-    await bridge.close();
+    await saveState(context, { phase: "finished", peerFinishAccepted: true });
   } else if (message.kind === "finish_reject") {
-    await saveState({ phase: "active", peerFinishAccepted: false });
+    await saveState(context, { phase: "active", peerFinishAccepted: false });
   }
 
-  if (config.channelMode && mcpReady) {
+  if (context.config.channelMode && mcpReady) {
     try {
       await mcp.notification({
         method: "notifications/claude/channel",
         params: {
           content: naturalMessage(message),
           meta: {
-            room_id: config.roomId,
+            room_id: context.config.roomId,
             sender_id: message.from,
             message_id: message.id,
             kind: message.kind,
           },
         },
       });
-      bridge.discard(message.id);
+      if (message.kind !== "request") context.bridge.discard(message.id);
     } catch (error) {
-      await bridge.log.write("channel_push_failed", { error: error.message });
+      await context.bridge.log.write("channel_push_failed", { error: error.message });
     }
   }
-});
+}
+
+async function reloadConfigNow() {
+  const rawConfig = await readFile(configPath, "utf8");
+  const fingerprint = createHash("sha256").update(rawConfig).digest("hex");
+  if (activeContext?.fingerprint === fingerprint) return activeContext;
+
+  const config = await loadBridgeConfig(configPath);
+  const stateFile = `${config.configPath}.${config.roomId}.state.json`;
+  const context = {
+    config,
+    stateFile,
+    state: await loadState(stateFile),
+    bridge: new BridgeClient(config),
+    fingerprint,
+    openRequests: new Map(),
+    stateSaveQueue: Promise.resolve(),
+  };
+  context.bridge.on("message", (message) => {
+    void onBridgeMessage(context, message).catch((error) =>
+      context.bridge.log.write("message_handler_failed", { error: error.message }),
+    );
+  });
+
+  const previous = activeContext;
+  activeContext = context;
+  lastReloadError = null;
+  if (mcpReady) void context.bridge.start();
+  if (previous) await previous.bridge.close();
+  return context;
+}
+
+function refreshConfig() {
+  const operation = reloadQueue.then(() => reloadConfigNow());
+  reloadQueue = operation.catch(() => {});
+  return operation;
+}
 
 const tools = [
   {
     name: "peer_status",
-    description: "Show the encrypted peer session state, connection status, role, phase, and local log path.",
+    description: "Show persistent-link status, active config, peer state, and current structured-goal phase.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "peer_ask",
+    description:
+      "Ask the peer an ad-hoc question and wait while it leaves AgentLink to perform local read-only inspection. The model generates no tokens while this tool is pending.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: { type: "string", minLength: 1 },
+        timeout_seconds: { type: "integer", minimum: 1, maximum: 86400 },
+      },
+      required: ["question"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "peer_listen",
+    description:
+      "Wait for the peer's next ad-hoc request. After this returns, inspect only the necessary local data, call peer_respond with its request ID, then call peer_listen again.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        timeout_seconds: { type: "integer", minimum: 1, maximum: 86400 },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "peer_respond",
+    description:
+      "Answer one request returned by peer_listen after completing the necessary local read-only work. Then return to peer_listen.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        request_id: { type: "string", minLength: 1 },
+        message: { type: "string", minLength: 1 },
+      },
+      required: ["request_id", "message"],
+      additionalProperties: false,
+    },
   },
   {
     name: "peer_goal",
     description:
-      "Negotiate the mandatory final goal of this conversation. Initiator uses propose; responder uses wait then accept/reject.",
+      "Optionally negotiate a structured final goal. Initiator uses propose; responder uses wait then accept/reject.",
     inputSchema: {
       type: "object",
       properties: {
@@ -147,7 +245,7 @@ const tools = [
   {
     name: "peer_exchange",
     description:
-      "Radio-style exchange for Codex: optionally send one natural-language message, then remain suspended until the peer replies. No model tokens are generated while the tool is pending.",
+      "Radio-style structured-goal exchange: optionally send one chat message, then suspend until the peer replies.",
     inputSchema: {
       type: "object",
       properties: {
@@ -159,8 +257,7 @@ const tools = [
   },
   {
     name: "peer_reply",
-    description:
-      "Send a natural-language reply without waiting. Use this for Claude channel events, which can wake the session again when the peer responds.",
+    description: "Send an uncorrelated chat reply for structured goals or Claude channel events.",
     inputSchema: {
       type: "object",
       properties: { message: { type: "string", minLength: 1 } },
@@ -171,7 +268,7 @@ const tools = [
   {
     name: "peer_complete",
     description:
-      "Mutually finish the conversation once its accepted goal and success criteria are satisfied.",
+      "Mutually complete the current structured goal. The persistent AgentLink transport remains connected for later requests.",
     inputSchema: {
       type: "object",
       properties: {
@@ -200,133 +297,215 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 
 mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   const args = params.arguments || {};
-  const timeoutMs = Number(args.timeout_seconds || 3600) * 1000;
-  await bridge.log.write("tool_called", { tool: params.name, arguments: args });
+  let context;
   try {
-    if (params.name === "peer_status" && state.phase === "finished") {
-      return result(JSON.stringify({ ...bridge.status(), session: state }, null, 2), {
-        ...bridge.status(),
-        session: state,
-      });
-    }
-    await bridge.connect();
+    context = await refreshConfig();
+    const persistentWait = params.name === "peer_ask" || params.name === "peer_listen";
+    const timeoutMs = Number(args.timeout_seconds || (persistentWait ? 86400 : 3600)) * 1000;
+    await context.bridge.log.write("tool_called", { tool: params.name, arguments: args });
+    await context.bridge.connect();
+
     if (params.name === "peer_status") {
-      return result(JSON.stringify({ ...bridge.status(), session: state }, null, 2), {
-        ...bridge.status(),
-        session: state,
+      const status = {
+        ...context.bridge.status(),
+        persistent: true,
+        hotReload: true,
+        configPath,
+        configReloadError: lastReloadError,
+        openRequests: context.openRequests.size,
+        session: context.state,
+      };
+      return result(JSON.stringify(status, null, 2), status);
+    }
+
+    if (params.name === "peer_ask") {
+      const question = args.question?.trim();
+      if (!question) throw new Error("question is required");
+      const requestId = await context.bridge.send(question, {
+        kind: "request",
+        metadata: { displayName: context.config.displayName },
+      });
+      const incoming = await context.bridge.wait({
+        kinds: ["response"],
+        predicate: (message) => message.metadata?.replyTo === requestId,
+        timeoutMs,
+      });
+      return result(naturalMessage(incoming), { requestId, message: incoming });
+    }
+
+    if (params.name === "peer_listen") {
+      const incoming = await context.bridge.wait({ kinds: ["request"], timeoutMs });
+      trackOpenRequest(context, incoming);
+      return result(
+        `${naturalMessage(incoming)}\n\nRequest ID: ${incoming.id}\nPerform the necessary local read-only work, call peer_respond with this request_id, then call peer_listen again.`,
+        { request: incoming },
+      );
+    }
+
+    if (params.name === "peer_respond") {
+      const requestId = args.request_id?.trim();
+      const message = args.message?.trim();
+      if (!requestId || !message) throw new Error("request_id and message are required");
+      if (!context.openRequests.has(requestId)) {
+        throw new Error("Unknown or already answered request_id; call peer_listen first");
+      }
+      const responseId = await context.bridge.send(message, {
+        kind: "response",
+        metadata: { displayName: context.config.displayName, replyTo: requestId },
+      });
+      context.openRequests.delete(requestId);
+      context.bridge.discard(requestId);
+      return result("Response sent. Call peer_listen again to keep serving future requests.", {
+        requestId,
+        responseId,
       });
     }
 
     if (params.name === "peer_goal") {
       if (args.action === "propose") {
-        if (config.role !== "initiator") throw new Error("Only the initiator may propose the first goal");
+        if (context.config.role !== "initiator") {
+          throw new Error("Only the initiator may propose the first goal");
+        }
         if (!args.goal?.trim()) throw new Error("goal is required");
         const criteria = args.success_criteria || [];
-        await saveState({
+        await saveState(context, {
           phase: "goal_proposed",
           goal: args.goal.trim(),
           successCriteria: criteria,
         });
-        await bridge.send(args.goal.trim(), {
+        await context.bridge.send(args.goal.trim(), {
           kind: "goal_proposal",
-          metadata: { displayName: config.displayName, successCriteria: criteria },
+          metadata: { displayName: context.config.displayName, successCriteria: criteria },
         });
-        const reply = await bridge.wait({
+        const reply = await context.bridge.wait({
           kinds: ["goal_accept", "goal_reject"],
           timeoutMs,
         });
-        return result(naturalMessage(reply), { message: reply, session: state });
+        return result(naturalMessage(reply), { message: reply, session: context.state });
       }
       if (args.action === "wait") {
-        const proposal = await bridge.wait({ kinds: ["goal_proposal"], timeoutMs });
-        return result(naturalMessage(proposal), { message: proposal, session: state });
+        const proposal = await context.bridge.wait({ kinds: ["goal_proposal"], timeoutMs });
+        return result(naturalMessage(proposal), { message: proposal, session: context.state });
       }
-      if (!["goal_proposed_by_peer", "negotiating_goal"].includes(state.phase)) {
-        throw new Error(`Cannot ${args.action} goal while phase is ${state.phase}`);
+      if (!["goal_proposed_by_peer", "negotiating_goal"].includes(context.state.phase)) {
+        throw new Error(`Cannot ${args.action} goal while phase is ${context.state.phase}`);
       }
       const accepted = args.action === "accept";
-      await bridge.send(args.note || (accepted ? "Goal accepted." : "The goal needs clarification."), {
-        kind: accepted ? "goal_accept" : "goal_reject",
-        metadata: { displayName: config.displayName },
+      await context.bridge.send(
+        args.note || (accepted ? "Goal accepted." : "The goal needs clarification."),
+        {
+          kind: accepted ? "goal_accept" : "goal_reject",
+          metadata: { displayName: context.config.displayName },
+        },
+      );
+      await saveState(context, {
+        phase: accepted ? "active" : "negotiating_goal",
+        localGoalAccepted: accepted,
       });
-      await saveState({ phase: accepted ? "active" : "negotiating_goal", localGoalAccepted: accepted });
-      return result(accepted ? "Goal accepted. The conversation may begin." : "Rejection sent. Wait for a revised goal.", { session: state });
+      return result(
+        accepted ? "Goal accepted. The structured conversation may begin." : "Rejection sent.",
+        { session: context.state },
+      );
     }
 
     if (params.name === "peer_exchange") {
-      if (state.phase !== "active") throw new Error(`Conversation is not active; current phase is ${state.phase}`);
-      const incoming = await bridge.exchange(args.message?.trim(), {
+      if (context.state.phase !== "active") {
+        throw new Error(`Conversation is not active; current phase is ${context.state.phase}`);
+      }
+      const incoming = await context.bridge.exchange(args.message?.trim(), {
         kind: "chat",
-        metadata: { displayName: config.displayName },
+        metadata: { displayName: context.config.displayName },
         timeoutMs,
       });
       return result(naturalMessage(incoming), { message: incoming });
     }
 
     if (params.name === "peer_reply") {
-      if (state.phase !== "active" && state.phase !== "finish_proposed_by_peer") {
-        throw new Error(`Conversation is not active; current phase is ${state.phase}`);
+      if (context.state.phase !== "active" && context.state.phase !== "finish_proposed_by_peer") {
+        throw new Error(`Conversation is not active; current phase is ${context.state.phase}`);
       }
-      const id = await bridge.send(args.message.trim(), {
+      const id = await context.bridge.send(args.message.trim(), {
         kind: "chat",
-        metadata: { displayName: config.displayName },
+        metadata: { displayName: context.config.displayName },
       });
-      return result("Reply sent. The session may return to the background and wait for the next channel event.", { messageId: id });
+      return result("Reply sent.", { messageId: id });
     }
 
     if (params.name === "peer_complete") {
       if (args.action === "propose") {
-        if (state.phase !== "active") throw new Error(`Cannot finish while phase is ${state.phase}`);
+        if (context.state.phase !== "active") {
+          throw new Error(`Cannot complete while phase is ${context.state.phase}`);
+        }
         if (!args.summary?.trim()) throw new Error("summary is required");
-        await saveState({ phase: "finish_proposed", finishSummary: args.summary.trim() });
-        await bridge.send(args.summary.trim(), {
+        await saveState(context, { phase: "finish_proposed", finishSummary: args.summary.trim() });
+        await context.bridge.send(args.summary.trim(), {
           kind: "finish_proposal",
-          metadata: { displayName: config.displayName },
+          metadata: { displayName: context.config.displayName },
         });
-        const reply = await bridge.wait({
+        const reply = await context.bridge.wait({
           kinds: ["finish_accept", "finish_reject"],
           timeoutMs,
         });
-        return result(naturalMessage(reply), { message: reply, session: state });
+        return result(naturalMessage(reply), { message: reply, session: context.state });
       }
-      if (state.phase !== "finish_proposed_by_peer") {
-        throw new Error(`No peer finish proposal is pending; current phase is ${state.phase}`);
+      if (context.state.phase !== "finish_proposed_by_peer") {
+        throw new Error(`No peer completion proposal is pending; current phase is ${context.state.phase}`);
       }
       const accepted = args.action === "accept";
-      await bridge.send(args.note || (accepted ? "Completion confirmed." : "The goal has not been reached yet."), {
-        kind: accepted ? "finish_accept" : "finish_reject",
-        metadata: { displayName: config.displayName },
+      await context.bridge.send(
+        args.note || (accepted ? "Completion confirmed." : "The goal has not been reached yet."),
+        {
+          kind: accepted ? "finish_accept" : "finish_reject",
+          metadata: { displayName: context.config.displayName },
+        },
+      );
+      await saveState(context, {
+        phase: accepted ? "finished" : "active",
+        localFinishAccepted: accepted,
       });
-      await saveState({ phase: accepted ? "finished" : "active", localFinishAccepted: accepted });
-      if (accepted) await bridge.close();
-      return result(accepted ? "Conversation ended by mutual agreement." : "The conversation will continue.", { session: state });
+      return result(
+        accepted
+          ? "Current goal completed by mutual agreement. The persistent link remains connected."
+          : "The current goal will continue.",
+        { session: context.state },
+      );
     }
 
     if (params.name === "peer_escalate") {
-      const id = await bridge.send(args.question.trim(), {
+      const id = await context.bridge.send(args.question.trim(), {
         kind: "escalation",
-        metadata: { displayName: config.displayName },
+        metadata: { displayName: context.config.displayName },
       });
       return result("Human-intervention request sent.", { messageId: id });
     }
 
     throw new Error(`Unknown tool: ${params.name}`);
   } catch (error) {
-    await bridge.log.write("tool_failed", { tool: params.name, error: error.message });
+    if (context) {
+      await context.bridge.log.write("tool_failed", { tool: params.name, error: error.message });
+    }
     return failure(error);
   }
 });
 
+await refreshConfig();
 const transport = new StdioServerTransport();
 await mcp.connect(transport);
 mcpReady = true;
-if (config.channelMode) void bridge.start();
+void activeContext.bridge.start();
 
-process.on("SIGINT", async () => {
-  await bridge.close();
+const reloadTimer = setInterval(() => {
+  void refreshConfig().catch((error) => {
+    lastReloadError = error.message;
+  });
+}, 500);
+reloadTimer.unref();
+
+async function shutdown() {
+  clearInterval(reloadTimer);
+  await activeContext?.bridge.close();
   process.exit(0);
-});
-process.on("SIGTERM", async () => {
-  await bridge.close();
-  process.exit(0);
-});
+}
+
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());

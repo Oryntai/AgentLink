@@ -375,9 +375,10 @@ export class BridgeClient extends EventEmitter {
     return id;
   }
 
-  wait({ kinds, timeoutMs = 0 } = {}) {
+  wait({ kinds, predicate, timeoutMs = 0 } = {}) {
     const kindSet = kinds ? new Set(kinds) : null;
-    const matches = (message) => !kindSet || kindSet.has(message.kind);
+    const matches = (message) =>
+      (!kindSet || kindSet.has(message.kind)) && (!predicate || predicate(message));
     const index = this.inbox.findIndex(matches);
     if (index >= 0) return Promise.resolve(this.inbox.splice(index, 1)[0]);
 
@@ -396,7 +397,7 @@ export class BridgeClient extends EventEmitter {
 
   async exchange(text, options = {}) {
     if (text) await this.send(text, options);
-    return this.wait({ timeoutMs: options.timeoutMs });
+    return this.wait({ kinds: options.responseKinds || ["chat"], timeoutMs: options.timeoutMs });
   }
 
   status() {

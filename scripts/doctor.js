@@ -34,12 +34,13 @@ async function readOptional(file) {
 
 let localConfigs = [];
 await check("Local participant configs", async () => {
-  const files = (await readdir(configDir)).filter(
+  const available = (await readdir(configDir)).filter(
     (name) =>
       name.endsWith(".json") &&
       !name.endsWith(".state.json") &&
       !name.endsWith(".trust.json"),
   );
+  const files = available.includes("active.json") ? ["active.json"] : available;
   if (!files.length) throw new Error("no participant configs found");
   localConfigs = await Promise.all(
     files.map(async (name) => {

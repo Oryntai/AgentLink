@@ -23,7 +23,7 @@ try {
   assert.equal(redactSecret("token=private-token", "private-token"), "token=[REDACTED]");
 
   const roomCode = createRoomCode();
-  const { configPath, statePath } = await writeParticipantConfig({
+  const { configPath, statePath, activeConfigPath, activeStatePath } = await writeParticipantConfig({
     configDir: tempDir,
     relayUrl: "wss://temporary-example.ngrok.app/ws",
     roomCode,
@@ -33,12 +33,17 @@ try {
   });
   const config = JSON.parse(await readFile(configPath, "utf8"));
   const state = JSON.parse(await readFile(statePath, "utf8"));
+  const activeConfig = JSON.parse(await readFile(activeConfigPath, "utf8"));
+  const activeState = JSON.parse(await readFile(activeStatePath, "utf8"));
   assert.equal(config.roomCode, roomCode);
   assert.equal(config.role, "responder");
   assert.equal(config.relayUrl, "wss://temporary-example.ngrok.app/ws");
   assert(config.identity.publicKey.includes("BEGIN PUBLIC KEY"));
   assert(config.identity.privateKey.includes("BEGIN PRIVATE KEY"));
   assert.equal(state.phase, "negotiating_goal");
+  assert.deepEqual(activeConfig, config);
+  assert.equal(activeState.phase, "negotiating_goal");
+  assert.equal(path.basename(activeConfigPath), "active.json");
   assert.doesNotMatch(configPath, /room_/);
 
   const originalIdentity = config.identity;
@@ -51,8 +56,11 @@ try {
     role: "responder",
   });
   const rotated = JSON.parse(await readFile(configPath, "utf8"));
+  const rotatedActive = JSON.parse(await readFile(activeConfigPath, "utf8"));
   assert.deepEqual(rotated.identity, originalIdentity);
-  console.log("SETUP PASS: temporary relay URL and participant config verified");
+  assert.deepEqual(rotatedActive.identity, originalIdentity);
+  assert.equal(rotatedActive.relayUrl, "wss://another-temporary-example.ngrok.app/ws");
+  console.log("SETUP PASS: participant identity and permanent active config verified");
 } finally {
   await rm(tempDir, { recursive: true, force: true });
 }

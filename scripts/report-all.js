@@ -23,12 +23,13 @@ async function readJsonl(filePath, sensitiveKey) {
   }
 }
 
-const names = (await readdir(configDir)).filter(
+const availableNames = (await readdir(configDir)).filter(
   (name) =>
     name.endsWith(".json") &&
     !name.endsWith(".state.json") &&
     !name.endsWith(".trust.json"),
 );
+const names = availableNames.includes("active.json") ? ["active.json"] : availableNames;
 if (!names.length) throw new Error(`No AgentLink configs found in ${configDir}`);
 
 const participants = [];
@@ -49,7 +50,10 @@ for (const name of names) {
   }
   let session = { phase: "not_started" };
   try {
-    session = await readJson(`${configPath}.state.json`);
+    const statePath = name === "active.json"
+      ? `${configPath}.${roomId}.state.json`
+      : `${configPath}.state.json`;
+    session = await readJson(statePath);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }

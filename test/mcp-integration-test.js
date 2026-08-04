@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { z } from "zod";
-import { createIdentity, createRoomCode } from "../src/crypto.js";
+import { createIdentity, createRoomCode, parseRoomCode } from "../src/crypto.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mcpScript = path.join(rootDir, "src", "mcp-server.js");
@@ -78,26 +78,30 @@ const relayUrl = `ws://127.0.0.1:${port}/ws`;
 const roomCode = createRoomCode();
 const alicePath = path.join(tempDir, "alice.json");
 const bobPath = path.join(tempDir, "bob.json");
-await writeFile(alicePath, JSON.stringify({
+const aliceIdentity = createIdentity();
+const bobIdentity = createIdentity();
+const aliceConfig = {
   relayUrl,
   roomCode,
   agentId: "alice-codex",
   displayName: "Alice Codex",
   role: "initiator",
-  identity: createIdentity(),
+  identity: aliceIdentity,
   channelMode: false,
   logDir: "logs/alice",
-}));
-await writeFile(bobPath, JSON.stringify({
+};
+const bobConfig = {
   relayUrl,
   roomCode,
   agentId: "bob-claude",
   displayName: "Bob Claude",
   role: "responder",
-  identity: createIdentity(),
+  identity: bobIdentity,
   channelMode: true,
   logDir: "logs/bob",
-}));
+};
+await writeFile(alicePath, JSON.stringify(aliceConfig));
+await writeFile(bobPath, JSON.stringify(bobConfig));
 
 const relay = spawn(process.execPath, [path.join(rootDir, "src", "relay-server.js")], {
   cwd: rootDir,
@@ -124,6 +128,11 @@ try {
   const aliceTools = await alice.client.listTools();
   assert(aliceTools.tools.some((tool) => tool.name === "peer_exchange"));
 
+  const goalListener = bob.client.callTool({
+    name: "peer_goal",
+    arguments: { action: "wait", timeout_seconds: 10 },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 100));
   const propose = alice.client.callTool({
     name: "peer_goal",
     arguments: {
@@ -133,10 +142,7 @@ try {
       timeout_seconds: 10,
     },
   });
-  const waitedGoal = await bob.client.callTool({
-    name: "peer_goal",
-    arguments: { action: "wait", timeout_seconds: 10 },
-  });
+  const waitedGoal = await goalListener;
   assert.match(textOf(waitedGoal), /Agree on the button interface/);
   const accepted = await bob.client.callTool({
     name: "peer_goal",
@@ -166,19 +172,125 @@ try {
     },
   });
   await new Promise((resolve) => setTimeout(resolve, 100));
-  assert(channelEvents.some((event) => /proposes ending the conversation/.test(event.content)));
+  assert(channelEvents.some((event) => /proposes completing the current goal/.test(event.content)));
   await bob.client.callTool({
     name: "peer_complete",
     arguments: { action: "accept", note: "Completion confirmed" },
   });
-  assert.match(textOf(await finishProposal), /confirmed completion/);
+  assert.match(textOf(await finishProposal), /confirmed goal completion/);
 
   const status = await alice.client.callTool({ name: "peer_status", arguments: {} });
   assert.match(textOf(status), /finished/);
-  assert.equal(status.structuredContent.connected, false);
+  assert.equal(status.structuredContent.connected, true);
+  assert.equal(status.structuredContent.persistent, true);
+  assert.equal(status.structuredContent.hotReload, true);
   const bobStatus = await bob.client.callTool({ name: "peer_status", arguments: {} });
-  assert.equal(bobStatus.structuredContent.connected, false);
-  console.log("MCP PASS: stdio tools, blocking exchange, Claude push channel, goal, finish, and auto-disconnect verified");
+  assert.equal(bobStatus.structuredContent.connected, true);
+
+  const firstAsk = alice.client.callTool({
+    name: "peer_ask",
+    arguments: { question: "Which database column stores the label?", timeout_seconds: 10 },
+  });
+  const firstRequest = await bob.client.callTool({
+    name: "peer_listen",
+    arguments: { timeout_seconds: 10 },
+  });
+  assert.match(textOf(firstRequest), /Which database column stores the label/);
+  const firstRequestId = firstRequest.structuredContent.request.id;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  await bob.client.callTool({
+    name: "peer_respond",
+    arguments: {
+      request_id: firstRequestId,
+      message: "The read-only schema inspection shows the column is display_label",
+    },
+  });
+  assert.match(textOf(await firstAsk), /display_label/);
+
+  const nextListen = bob.client.callTool({
+    name: "peer_listen",
+    arguments: { timeout_seconds: 10 },
+  });
+  const secondAsk = alice.client.callTool({
+    name: "peer_ask",
+    arguments: { question: "Which values are present in that column?", timeout_seconds: 10 },
+  });
+  const secondRequest = await nextListen;
+  await bob.client.callTool({
+    name: "peer_respond",
+    arguments: {
+      request_id: secondRequest.structuredContent.request.id,
+      message: "The requested row contains Checkout",
+    },
+  });
+  assert.match(textOf(await secondAsk), /Checkout/);
+
+  const askFromAlice = alice.client.callTool({
+    name: "peer_ask",
+    arguments: { question: "Alice asks for Bob's requirement", timeout_seconds: 10 },
+  });
+  const askFromBob = bob.client.callTool({
+    name: "peer_ask",
+    arguments: { question: "Bob asks for Alice's component name", timeout_seconds: 10 },
+  });
+  const [requestAtAlice, requestAtBob] = await Promise.all([
+    alice.client.callTool({ name: "peer_listen", arguments: { timeout_seconds: 10 } }),
+    bob.client.callTool({ name: "peer_listen", arguments: { timeout_seconds: 10 } }),
+  ]);
+  await Promise.all([
+    alice.client.callTool({
+      name: "peer_respond",
+      arguments: {
+        request_id: requestAtAlice.structuredContent.request.id,
+        message: "Alice-only answer: PaymentButton",
+      },
+    }),
+    bob.client.callTool({
+      name: "peer_respond",
+      arguments: {
+        request_id: requestAtBob.structuredContent.request.id,
+        message: "Bob-only answer: audit logging is required",
+      },
+    }),
+  ]);
+  assert.match(textOf(await askFromAlice), /Bob-only answer/);
+  assert.match(textOf(await askFromBob), /Alice-only answer/);
+
+  const rotatedRoomCode = createRoomCode();
+  const resetState = JSON.stringify({ phase: "negotiating_goal", goal: null, successCriteria: [] });
+  const rotatedRoomId = parseRoomCode(rotatedRoomCode).roomId;
+  await Promise.all([
+    writeFile(`${alicePath}.${rotatedRoomId}.state.json`, resetState),
+    writeFile(`${bobPath}.${rotatedRoomId}.state.json`, resetState),
+  ]);
+  await writeFile(alicePath, JSON.stringify({ ...aliceConfig, roomCode: rotatedRoomCode }));
+  await writeFile(bobPath, JSON.stringify({ ...bobConfig, roomCode: rotatedRoomCode }));
+  await new Promise((resolve) => setTimeout(resolve, 750));
+
+  const rotatedAliceStatus = await alice.client.callTool({ name: "peer_status", arguments: {} });
+  const rotatedBobStatus = await bob.client.callTool({ name: "peer_status", arguments: {} });
+  assert.equal(rotatedAliceStatus.structuredContent.roomId, rotatedRoomId);
+  assert.equal(rotatedBobStatus.structuredContent.roomId, rotatedRoomId);
+  assert.equal(rotatedAliceStatus.structuredContent.session.phase, "negotiating_goal");
+
+  const hotAsk = alice.client.callTool({
+    name: "peer_ask",
+    arguments: { question: "Did hot reload require a GUI restart?", timeout_seconds: 10 },
+  });
+  const hotRequest = await bob.client.callTool({
+    name: "peer_listen",
+    arguments: { timeout_seconds: 10 },
+  });
+  await bob.client.callTool({
+    name: "peer_respond",
+    arguments: {
+      request_id: hotRequest.structuredContent.request.id,
+      message: "No, both existing MCP clients switched rooms in place",
+    },
+  });
+  assert.match(textOf(await hotAsk), /switched rooms in place/);
+
+  console.log("MCP PASS: persistent asks, local-work loop, simultaneous correlation, goal completion, and hot reload verified");
 } finally {
   await Promise.allSettled([alice?.client.close(), bob?.client.close()]);
   relay.kill("SIGTERM");

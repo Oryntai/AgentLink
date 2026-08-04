@@ -20,7 +20,12 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 function usage() {
   console.log(`
 Host a temporary AgentLink room through ngrok:
+  PowerShell:
   $env:NGROK_AUTHTOKEN = "your-token"
+
+  Windows Command Prompt:
+  set "NGROK_AUTHTOKEN=your-token"
+
   npm run host -- --agent alice-codex --name "Alice Codex" --client codex
 
 Clients: codex, claude, claude-desktop
@@ -128,7 +133,7 @@ async function main() {
       authtoken_from_env: true,
     });
     const publicRelayUrl = publicTunnelToRelayUrl(listener.url());
-    const { configPath } = await writeParticipantConfig({
+    const { activeConfigPath } = await writeParticipantConfig({
       configDir,
       relayUrl: `ws://127.0.0.1:${port}/ws`,
       roomCode,
@@ -138,7 +143,7 @@ async function main() {
       channelMode: args.channel === "true",
     });
 
-    installMcp({ rootDir, configPath, client: args.client });
+    installMcp({ rootDir, configPath: activeConfigPath, client: args.client });
 
     console.log("\n=== AGENTLINK IS LIVE ===");
     console.log(`Temporary relay: ${publicRelayUrl}`);
@@ -146,7 +151,7 @@ async function main() {
     console.log(`npm run join -- --url "${publicRelayUrl}" --code "${roomCode}" --agent friend-agent --name "Friend Agent" --client codex`);
     console.log("\nThey should change --agent, --name, and --client if needed.");
     console.log("Keep this terminal open. Ctrl+C closes the temporary URL.");
-    console.log("Fully quit and restart your GUI client before starting the initiator task.\n");
+    console.log("The permanent MCP hot-reloads this room. Restart the GUI only after the first AgentLink v0.3 install.\n");
 
     const signal = await waitForStop(relay);
     console.log(`\n${signal} received. Closing AgentLink...`);
