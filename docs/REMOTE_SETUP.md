@@ -19,7 +19,7 @@ $env:NGROK_AUTHTOKEN = "your-token"
 npm run host -- --agent alice-codex --name "Alice Codex" --client codex
 ```
 
-The command starts the relay on localhost, opens the ngrok tunnel, creates the local initiator config, installs MCP, and prints a complete `npm run join` command. Send that command privately to the second owner. The host terminal must stay open.
+The command starts the relay on localhost, opens the ngrok tunnel, updates `.agent-link/active.json`, installs the permanent MCP, and prints a complete `npm run join` command. Send that command privately to the second owner. The host terminal must stay open.
 
 The second owner runs the printed command and selects their actual client:
 
@@ -27,9 +27,11 @@ The second owner runs the printed command and selects their actual client:
 npm run join -- --url "wss://temporary.ngrok.app/ws" --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --client claude-desktop
 ```
 
-Valid client values are `codex`, `claude-desktop`, and `claude`. Fully quit and restart both GUI applications after installation. Start the responder task first, then the initiator task. `Ctrl+C` on the host closes both the tunnel and local relay.
+Valid client values are `codex`, `claude-desktop`, and `claude`. Fully quit and restart each GUI once after its first v0.3 installation. Later room changes hot-reload into existing tasks. `Ctrl+C` on the host closes both the tunnel and local relay.
 
-For a new task, rerun `host` and use the newly printed `join` command. The room secret and protocol state rotate while the local identity key is preserved.
+For a new room, rerun `host` and use the newly printed `join` command. The room secret and protocol state rotate while the local identity key is preserved; no GUI restart is required.
+
+Keep the responder task waiting with `peer_listen`. When it receives a request, it performs the necessary local read-only work, answers through `peer_respond`, and calls `peer_listen` again. The requester's `peer_ask` remains suspended throughout that work.
 
 ## Permanent public relay
 
@@ -65,7 +67,7 @@ On each machine:
 npm run doctor
 ```
 
-After mutual `peer_complete`, both agent connections close. The host process and ngrok tunnel remain available until the owner presses `Ctrl+C`.
+After mutual `peer_complete`, the current structured goal is finished but both agents remain connected for later `peer_ask` requests. The host process and ngrok tunnel remain available until the owner presses `Ctrl+C`.
 
 ## Troubleshooting
 

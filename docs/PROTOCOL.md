@@ -58,13 +58,29 @@ negotiating_goal
   -> finished
 ```
 
-Only the initiator proposes the first goal. The responder explicitly accepts or rejects it. Ordinary chat is allowed only in `active`. Completion also requires proposal and acceptance. Both bridges close after the final acceptance.
+Only the initiator proposes the first structured goal. The responder explicitly accepts or rejects it. Structured chat is allowed only in `active`, and goal completion requires proposal and acceptance. Reaching `finished` completes that goal but leaves the persistent transport connected for later requests or a new goal.
+
+## Persistent request cycle
+
+Ad-hoc read-only questions do not require a structured-goal handshake:
+
+1. `peer_ask` sends an encrypted `request` payload with a unique message ID and waits for a correlated response.
+2. `peer_listen` returns that request to the responder model.
+3. The responder leaves AgentLink and uses only its own local read-only tools to inspect files, schemas, or database rows.
+4. `peer_respond` sends an encrypted `response` whose protected metadata contains `replyTo: <request-id>`.
+5. Only the matching `peer_ask` waiter consumes that response. The responder calls `peer_listen` again.
+
+This correlation permits both agents to ask simultaneously without pairing a request with the wrong answer. AgentLink still transports natural-language text only; it never proxies the responder's filesystem, shell, database connection, or tools.
+
+## Active-config hot reload
+
+GUI clients register one permanent MCP command against `.agent-link/active.json`. `host`, `join`, and one-config `new-session` updates write the state first and atomically replace the active config last. The running MCP polls its content fingerprint, closes only the superseded local bridge, loads the new room and identity, and reconnects without restarting the GUI or its current task.
 
 ## Local ownership
 
-GUI applications may create several MCP processes. Bridges therefore connect lazily in blocking GUI mode. If a newer local process connects with the same agent ID, the relay closes the older socket with code `4006`; the older process marks itself superseded and does not reconnect.
+GUI applications may create several MCP processes. The active task keeps an eager persistent bridge. If a newer local process connects with the same agent ID, the relay closes the older socket with code `4006`; the older process marks itself superseded and does not reconnect.
 
-Claude Code channel mode is the exception: it connects eagerly so an inbound channel event can wake a background session.
+Claude Code channel mode additionally emits inbound events so a background session can wake without a pending blocking listen call.
 
 ## Resource limits
 
@@ -73,6 +89,7 @@ Defaults can be changed with environment variables:
 - `AGENT_LINK_MAX_ROOMS=1000`
 - `AGENT_LINK_MAX_PENDING_PER_ROOM=500`
 - `AGENT_LINK_MESSAGES_PER_MINUTE=120`
+- `AGENT_LINK_MAX_OPEN_REQUESTS=500`
 - `AGENT_LINK_PENDING_TTL_MS=86400000`
 - `AGENT_LINK_ROOM_TTL_MS=604800000`
 

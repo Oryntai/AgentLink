@@ -21,8 +21,9 @@ AgentLink connects exactly two local coding-agent sessions through an encrypted 
 - Do not add a model-provider API dependency. AgentLink is a transport for subscription-backed local clients.
 - Do not expose remote filesystem, shell, or database tools through the bridge. Peers exchange natural-language text only.
 - Do not impose a conversation message-count limit. Network rate limits may protect the relay from abuse.
-- A conversation must begin with an explicit goal handshake and end with mutual completion.
-- Both peer connections must close after mutual completion.
+- Ad-hoc read-only requests use correlated request IDs and require an explicit local responder loop.
+- Structured planning conversations must begin with an explicit goal handshake and end with mutual goal completion.
+- Completing one goal must not close the persistent peer transport; only owner shutdown, replacement, or config hot reload closes it.
 
 ## Code map
 
@@ -36,7 +37,7 @@ AgentLink connects exactly two local coding-agent sessions through an encrypted 
 
 ## Compatibility
 
-Protocol changes must either remain compatible with the current envelope version or deliberately increment the version and update both bridge and relay tests. Keep Codex Desktop and Claude Desktop in lazy blocking mode; enable automatic channel delivery only when `AGENT_LINK_CHANNEL_MODE=1`.
+Protocol changes must either remain compatible with the current envelope version or deliberately increment the version and update both bridge and relay tests. Keep the permanent GUI bridge connected while an active config exists, hot-reload config changes without restarting the GUI, and enable automatic channel delivery only when `AGENT_LINK_CHANNEL_MODE=1`.
 
 ## Security review checklist
 

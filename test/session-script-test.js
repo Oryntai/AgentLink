@@ -48,8 +48,11 @@ try {
   });
   const initiator = await readJson(initiatorPath);
   const responder = await readJson(responderPath);
+  const active = await readJson(path.join(tempDir, "active.json"));
   assert.equal(initiator.roomCode, roomCode);
   assert.equal(responder.roomCode, roomCode);
+  assert.equal(active.roomCode, roomCode);
+  assert.equal(active.agentId, "bob-claude");
   assert.equal(initiator.identity.privateKey, initialIdentity.privateKey);
   assert.equal((await readJson(`${initiatorPath}.state.json`)).phase, "negotiating_goal");
   assert.equal((await readJson(`${responderPath}.state.json`)).phase, "negotiating_goal");

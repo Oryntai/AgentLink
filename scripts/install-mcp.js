@@ -39,38 +39,52 @@ async function installCodexDirect(mcpScript, configPath) {
   let original = "";
   try {
     original = await readFile(codexConfigPath, "utf8");
-    const backup = `${codexConfigPath}.agent-link-backup`;
-    await copyFile(codexConfigPath, backup);
-    console.log(`Backup created: ${backup}`);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   const lines = original.split(/\r?\n/);
   const header = "[mcp_servers.agent-link]";
   const start = lines.findIndex((line) => line.trim() === header);
-  if (start >= 0) {
-    let end = lines.length;
-    for (let i = start + 1; i < lines.length; i += 1) {
-      if (/^\s*\[/.test(lines[i])) {
-        end = i;
-        break;
-      }
-    }
-    lines.splice(start, end - start);
-  }
-  while (lines.length && !lines.at(-1).trim()) lines.pop();
-  lines.push(
-    "",
+  const desiredBlock = [
     header,
     `command = ${tomlString(process.execPath)}`,
     `args = [${tomlString(mcpScript)}, ${tomlString(configPath)}]`,
     "tool_timeout_sec = 86400",
     "required = true",
     'default_tools_approval_mode = "approve"',
+  ];
+  let end = lines.length;
+  if (start >= 0) {
+    for (let i = start + 1; i < lines.length; i += 1) {
+      if (/^\s*\[/.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    const existingBlock = lines.slice(start, end);
+    while (existingBlock.length && !existingBlock.at(-1).trim()) existingBlock.pop();
+    if (existingBlock.join("\n") === desiredBlock.join("\n")) {
+      console.log(`Permanent Codex MCP is already installed at ${codexConfigPath}`);
+      return false;
+    }
+  }
+  if (original) {
+    const backup = `${codexConfigPath}.agent-link-backup`;
+    await copyFile(codexConfigPath, backup);
+    console.log(`Backup created: ${backup}`);
+  }
+  if (start >= 0) {
+    lines.splice(start, end - start);
+  }
+  while (lines.length && !lines.at(-1).trim()) lines.pop();
+  lines.push(
+    "",
+    ...desiredBlock,
     "",
   );
   await writeFile(codexConfigPath, lines.join("\n"), "utf8");
   console.log(`Codex MCP written directly to ${codexConfigPath}`);
+  return true;
 }
 
 async function installClaudeDesktopDirect(mcpScript, configPath) {
@@ -81,20 +95,29 @@ async function installClaudeDesktopDirect(mcpScript, configPath) {
   let desktopConfig = {};
   try {
     desktopConfig = JSON.parse(await readFile(desktopConfigPath, "utf8"));
-    const backup = `${desktopConfigPath}.agent-link-backup`;
-    await copyFile(desktopConfigPath, backup);
-    console.log(`Backup created: ${backup}`);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   desktopConfig.mcpServers ||= {};
-  desktopConfig.mcpServers["agent-link"] = {
+  const desiredEntry = {
     command: process.execPath,
     args: [mcpScript, configPath],
     env: { AGENT_LINK_CHANNEL_MODE: "0" },
   };
+  if (JSON.stringify(desktopConfig.mcpServers["agent-link"]) === JSON.stringify(desiredEntry)) {
+    console.log(`Permanent Claude Desktop MCP is already installed at ${desktopConfigPath}`);
+    return false;
+  }
+  try {
+    await copyFile(desktopConfigPath, `${desktopConfigPath}.agent-link-backup`);
+    console.log(`Backup created: ${desktopConfigPath}.agent-link-backup`);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  desktopConfig.mcpServers["agent-link"] = desiredEntry;
   await writeFile(desktopConfigPath, `${JSON.stringify(desktopConfig, null, 2)}\n`, "utf8");
   console.log(`Claude Desktop MCP written to ${desktopConfigPath}`);
+  return true;
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -108,8 +131,10 @@ const mcpScript = path.join(rootDir, "src", "mcp-server.js");
 const name = "agent-link";
 
 if (args.client === "codex") {
-  await installCodexDirect(mcpScript, config.configPath);
-  console.log("Codex MCP installed. Restart Codex Desktop before testing.");
+  const changed = await installCodexDirect(mcpScript, config.configPath);
+  console.log(changed
+    ? "Permanent Codex MCP installed. Restart Codex Desktop once; future rooms hot-reload."
+    : "Codex MCP is ready. The active room will hot-reload without a GUI restart.");
 } else if (args.client === "claude") {
   run("claude", ["mcp", "remove", "--scope", "user", name], { allowFailure: true });
   run("claude", [
@@ -133,8 +158,10 @@ if (args.client === "codex") {
     console.log("claude --dangerously-load-development-channels server:agent-link");
   }
 } else if (args.client === "claude-desktop") {
-  await installClaudeDesktopDirect(mcpScript, config.configPath);
-  console.log("Claude Desktop MCP installed. Fully quit and restart Claude Desktop before testing.");
+  const changed = await installClaudeDesktopDirect(mcpScript, config.configPath);
+  console.log(changed
+    ? "Permanent Claude Desktop MCP installed. Restart Claude Desktop once; future rooms hot-reload."
+    : "Claude Desktop MCP is ready. The active room will hot-reload without a GUI restart.");
 } else {
   throw new Error("--client must be codex, claude, or claude-desktop");
 }

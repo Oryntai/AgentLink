@@ -2,6 +2,7 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRoomCode, parseRoomCode } from "../src/crypto.js";
+import { activateParticipantConfig } from "./setup-lib.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configDir = path.join(rootDir, ".agent-link");
@@ -28,6 +29,7 @@ const configPaths = args.paths.length
       .filter(
         (name) =>
           name.endsWith(".json") &&
+          name !== "active.json" &&
           !name.endsWith(".state.json") &&
           !name.endsWith(".trust.json"),
       )
@@ -41,6 +43,7 @@ const roomCode = args.roomCode || createRoomCode();
 parseRoomCode(roomCode);
 const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString();
 const participants = [];
+let singleConfig = null;
 for (const configPath of configPaths) {
   const config = JSON.parse(await readFile(configPath, "utf8"));
   if (!config.identity?.privateKey) {
@@ -55,10 +58,19 @@ for (const configPath of configPaths) {
     { mode: 0o600 },
   );
   participants.push(`${config.agentId}:${config.role}`);
+  singleConfig = config;
+}
+
+if (configPaths.length === 1) {
+  await activateParticipantConfig({
+    configDir: path.dirname(configPaths[0]),
+    config: singleConfig,
+  });
 }
 
 console.log(`New AgentLink session: ${participants.join(", ")}`);
 console.log(`Expires: ${expiresAt}`);
+if (configPaths.length === 1) console.log("Permanent MCP active.json updated; no GUI restart is required.");
 if (!args.roomCode) {
   console.log("Room code (share privately with the peer owner):");
   console.log(roomCode);

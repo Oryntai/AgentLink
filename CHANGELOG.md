@@ -2,6 +2,14 @@
 
 All notable changes to AgentLink are documented here.
 
+## 0.3.0 - 2026-08-04
+
+- Added a permanent MCP installation backed by hot-reloaded `.agent-link/active.json`.
+- Added correlated `peer_ask`, `peer_listen`, and `peer_respond` tools for ad-hoc read-only work during normal development.
+- Kept the encrypted WebSocket connected after completing an individual structured goal.
+- Made repeated Codex and Claude Desktop installation idempotent so only the v0.3 upgrade needs one final GUI restart.
+- Added regression coverage for local-work response loops, repeated listening, in-process room switching, and permanent MCP installation.
+
 ## 0.2.0 - 2026-08-04
 
 - Added `npm run host` to launch the local relay and an ephemeral ngrok tunnel together.

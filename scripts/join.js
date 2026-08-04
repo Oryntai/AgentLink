@@ -31,7 +31,7 @@ async function main() {
   if (!args.code) throw new Error("--code is required");
   const relayUrl = validateRelayUrl(args.url);
   const configDir = path.resolve(process.env.AGENT_LINK_CONFIG_DIR || path.join(rootDir, ".agent-link"));
-  const { configPath } = await writeParticipantConfig({
+  const { activeConfigPath } = await writeParticipantConfig({
     configDir,
     relayUrl,
     roomCode: args.code,
@@ -41,9 +41,9 @@ async function main() {
     channelMode: args.channel === "true",
   });
 
-  console.log(`Participant config created: ${configPath}`);
-  installMcp({ rootDir, configPath, client: args.client });
-  console.log("\nJoined. Fully quit and restart the GUI client, then start the responder task.");
+  console.log(`Active participant config created: ${activeConfigPath}`);
+  installMcp({ rootDir, configPath: activeConfigPath, client: args.client });
+  console.log("\nJoined. The permanent MCP hot-reloads this room; restart the GUI only after the first AgentLink v0.3 install.");
 }
 
 main().catch((error) => {
