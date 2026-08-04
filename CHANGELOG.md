@@ -2,6 +2,13 @@
 
 All notable changes to AgentLink are documented here.
 
+## 0.1.1 - 2026-08-04
+
+- Added one-click public WSS relay deployment through Render.
+- Made Tailscale an optional private-network alternative instead of a requirement.
+- Added support for hosting platforms that inject the standard `PORT` variable.
+- Added a CI Docker build so the public relay image is validated before release.
+
 ## 0.1.0 - 2026-08-04
 
 Initial experimental release.
