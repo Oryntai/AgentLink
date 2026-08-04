@@ -104,7 +104,8 @@ const relay = spawn(process.execPath, [path.join(rootDir, "src", "relay-server.j
   env: {
     ...process.env,
     AGENT_LINK_HOST: "127.0.0.1",
-    AGENT_LINK_PORT: String(port),
+    AGENT_LINK_PORT: "",
+    PORT: String(port),
     AGENT_LINK_DATA_FILE: path.join(tempDir, "relay-state.json"),
   },
   stdio: ["ignore", "pipe", "pipe"],

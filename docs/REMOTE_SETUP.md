@@ -1,78 +1,116 @@
 # Remote setup
 
-This guide connects two owners on different machines without a coordinator agent.
+This guide connects two owners on different machines without a coordinator agent, VPN, port forwarding, or a model API.
 
-## Recommended network: Tailscale
+## Recommended: one-click public relay
 
-Install Tailscale on both machines and confirm they can reach each other's Tailscale IP. Run the relay on only one machine.
+Only the relay owner needs a Render account. Both agent owners still run Codex or Claude through their own subscriptions.
 
-### Relay owner
+### 1. Deploy
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FOryntai%2FAgentLink)
+
+Approve the `render.yaml` Blueprint and wait for `/healthz` to become healthy. Copy the generated HTTPS service URL and convert it to an AgentLink URL:
+
+```text
+https://agentlink-relay-xxxx.onrender.com
+                         becomes
+wss://agentlink-relay-xxxx.onrender.com/ws
+```
+
+Render terminates TLS and forwards the WebSocket connection to the Docker relay. Free instances can restart or lose ephemeral relay state, so use a persistent paid deployment when reliable offline queuing is required. Active clients reconnect with exponential backoff.
+
+### 2. Clone on both machines
 
 ```powershell
 git clone https://github.com/Oryntai/AgentLink.git
 cd AgentLink
 npm ci
-$env:AGENT_LINK_HOST = "0.0.0.0"
-./scripts/start-relay.ps1
 ```
 
-Allow TCP port `8787` only on the private Tailscale interface when configuring a firewall.
-
-Create the initiator config with the relay owner's Tailscale IP:
+### 3. Initiator
 
 ```powershell
-npm run create-room -- --agent alice-codex --name "Alice Codex" --relay ws://100.x.y.z:8787/ws
+npm run create-room -- --agent alice-codex --name "Alice Codex" --relay wss://agentlink-relay-xxxx.onrender.com/ws
+node scripts/install-mcp.js --config ".agent-link\alice-codex.json" --client codex
 ```
 
-Send the printed `ROOM_CODE` to the second owner through a private authenticated channel.
+Send the printed `ROOM_CODE` and public relay URL to the second owner through a private authenticated channel. Never send the config file or identity private key.
 
-### Peer owner
+### 4. Peer
+
+For Claude Desktop:
 
 ```powershell
-git clone https://github.com/Oryntai/AgentLink.git
-cd AgentLink
-npm ci
-npm run join-room -- --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --relay ws://100.x.y.z:8787/ws --channel
+npm run join-room -- --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --relay wss://agentlink-relay-xxxx.onrender.com/ws
+node scripts/install-mcp.js --config ".agent-link\bob-claude.json" --client claude-desktop
 ```
 
-Install the generated config into the local client using the commands printed by the setup script, then fully restart that client.
+For Codex, change the agent ID and client:
+
+```powershell
+npm run join-room -- --code "ROOM_CODE" --agent bob-codex --name "Bob Codex" --relay wss://agentlink-relay-xxxx.onrender.com/ws
+node scripts/install-mcp.js --config ".agent-link\bob-codex.json" --client codex
+```
+
+Fully restart both GUI applications after installation.
 
 ## Later conversations
 
-For every new conversation, rotate the shared room. On the initiator machine:
+Rotate the shared room before every new conversation. On the initiator machine:
 
 ```powershell
 npm run new-session -- .agent-link\alice-codex.json
 ```
 
-Send the newly printed code privately to the peer owner. On the peer machine:
+Send the new code privately to the peer owner. On the peer machine:
 
 ```powershell
 npm run new-session -- --code "ROOM_CODE" .agent-link\bob-claude.json
 ```
 
-Restart both client tasks so their MCP processes reload the new session state.
+Restart both client tasks so their MCP processes reload the new state.
 
-## Public hosting
+## Optional: Tailscale private relay
 
-If a private overlay network is unavailable, place the relay behind a reverse proxy with TLS and use `wss://`. Restrict access by IP or an additional network layer where possible. Never expose `ws://` over the public internet.
+Tailscale is not required. Use it only if both owners prefer not to deploy a public relay.
 
-The relay needs persistent storage for `data/relay-state.json` if offline delivery should survive restarts. Docker deployments should mount `/app/data` and `/app/logs` as writable volumes.
+On one machine:
+
+```powershell
+$env:AGENT_LINK_HOST = "0.0.0.0"
+./scripts/start-relay.ps1
+```
+
+Both configs then use the relay owner's private address:
+
+```text
+ws://100.x.y.z:8787/ws
+```
+
+Do not expose plain `ws://` directly to the public internet.
+
+## Self-hosted public relay
+
+The included Dockerfile can run on any host that supports public WebSockets. Bind the service to `PORT`, terminate TLS at the platform or reverse proxy, and give clients a `wss://host/ws` URL.
+
+Persist `/app/data` if offline delivery must survive container restarts. The relay can observe connection metadata and ciphertext sizes but never receives room secrets or plaintext payloads.
 
 ## Verification
 
-On each machine, run:
+On each machine:
 
 ```powershell
 npm run doctor
 ```
 
-Start the responder task first, then the initiator task. The initiator should call `peer_status`, negotiate the goal, and use `peer_exchange`. After mutual `peer_complete`, both connections should close.
+Start the responder task first, then the initiator. After mutual `peer_complete`, both connections should close.
 
 ## Troubleshooting
 
-- `ECONNREFUSED`: relay is stopped, bound only to localhost, or blocked by a firewall.
+- `ECONNREFUSED`: the relay is stopped or still deploying.
+- HTTP `301` during WebSocket connection: use `wss://`, not `ws://`, for a public relay.
 - `unauthorized`: the room code differs between participants.
-- `agent identity key mismatch`: an agent ID was reused with another identity in the same room; create a new room or restore the original config.
-- `peer identity mismatch`: stop and verify the room code and peer config privately before retrying.
-- Expired session: run `npm run new-session` and redistribute the new room code privately.
+- `agent identity key mismatch`: the same agent ID was reused with another identity in the room.
+- `peer identity mismatch`: stop and verify the room code and peer config privately.
+- Expired session: rotate it with `npm run new-session` and redistribute only the new room code.

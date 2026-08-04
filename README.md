@@ -52,30 +52,51 @@ For GUI-to-GUI use, start one task in each application once. After that, the age
 - Node.js 20 or newer
 - Git
 - Codex Desktop, Claude Desktop, or Claude Code
-- Tailscale or a TLS reverse proxy for communication between machines
+- One free Render account for the relay owner, or any existing `wss://` host
 
-## Quick start: one machine
+## Quick start: two machines, no VPN
+
+### 1. Deploy the public relay
+
+Only one owner does this. No local relay, port forwarding, or VPN is required.
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2FOryntai%2FAgentLink)
+
+Approve the Blueprint and wait for the health check to pass. Render gives you an HTTPS address such as:
+
+```text
+https://agentlink-relay-xxxx.onrender.com
+```
+
+The AgentLink relay URL is the same address with `wss://` and `/ws`:
+
+```text
+wss://agentlink-relay-xxxx.onrender.com/ws
+```
+
+### 2. Clone on both machines
 
 ```powershell
 git clone https://github.com/Oryntai/AgentLink.git
 cd AgentLink
 npm ci
-./scripts/start-relay.ps1
 ```
 
-Create the initiator:
+### 3. The initiator creates a room
 
 ```powershell
-npm run create-room -- --agent alice-codex --name "Alice Codex" --relay ws://127.0.0.1:8787/ws
+npm run create-room -- --agent alice-codex --name "Alice Codex" --relay wss://agentlink-relay-xxxx.onrender.com/ws
 ```
 
-The command prints a secret `ROOM_CODE`. Use it to create the responder:
+Send only the printed secret `ROOM_CODE` and the public relay URL to the peer owner.
+
+### 4. The peer joins
 
 ```powershell
-npm run join-room -- --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --relay ws://127.0.0.1:8787/ws --channel
+npm run join-room -- --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --relay wss://agentlink-relay-xxxx.onrender.com/ws
 ```
 
-Install the MCP server into the clients you use:
+### 5. Install into each local client
 
 ```powershell
 node scripts/install-mcp.js --config ".agent-link\alice-codex.json" --client codex
@@ -90,6 +111,16 @@ claude --dangerously-load-development-channels server:agent-link
 ```
 
 Fully restart the GUI applications after installing or updating the MCP configuration.
+
+## Optional: local or private relay
+
+For a one-machine test, use `ws://127.0.0.1:8787/ws` and run:
+
+```powershell
+./scripts/start-relay.ps1
+```
+
+Tailscale is optional. It is useful only when both owners prefer a private relay instead of the public one-click deployment. See [Remote setup](docs/REMOTE_SETUP.md).
 
 ## Start a conversation
 
@@ -125,31 +156,6 @@ Prompt the responder:
 ```text
 Use AgentLink as the responder. Wait for the proposed goal through peer_goal, accept or reject it explicitly, and use only local read-only operations. Reply with the minimum necessary result and never disclose credentials or unrelated data. Verify all success criteria before accepting peer_complete.
 ```
-
-## Two machines
-
-1. Both owners clone the repository and run `npm ci`.
-2. One owner runs the relay on an address reachable through Tailscale.
-3. The initiator creates a room and sends the full `ROOM_CODE` privately to the responder.
-4. The responder joins using the relay machine's Tailscale address.
-5. Each owner installs only their own local config into their own client.
-
-On the relay machine:
-
-```powershell
-$env:AGENT_LINK_HOST = "0.0.0.0"
-./scripts/start-relay.ps1
-```
-
-On the responder machine:
-
-```powershell
-npm run join-room -- --code "ROOM_CODE" --agent bob-claude --name "Bob Claude" --relay ws://100.x.y.z:8787/ws --channel
-```
-
-Do not expose plain `ws://` directly to the public internet. Prefer Tailscale, or terminate TLS in a reverse proxy and use `wss://`.
-
-See [Remote setup](docs/REMOTE_SETUP.md) for the full checklist.
 
 ## Security model
 

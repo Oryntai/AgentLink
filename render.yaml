@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: agentlink-relay
+    runtime: docker
+    plan: free
+    autoDeployTrigger: off
+    healthCheckPath: /healthz
+    envVars:
+      - key: AGENT_LINK_HOST
+        value: 0.0.0.0

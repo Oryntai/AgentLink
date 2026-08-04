@@ -7,7 +7,7 @@ import { JsonlLogger } from "./logger.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const host = process.env.AGENT_LINK_HOST || "127.0.0.1";
-const port = Number(process.env.AGENT_LINK_PORT || 8787);
+const port = Number(process.env.AGENT_LINK_PORT || process.env.PORT || 8787);
 const dataFile = path.resolve(
   process.env.AGENT_LINK_DATA_FILE || path.join(rootDir, "data", "relay-state.json"),
 );
