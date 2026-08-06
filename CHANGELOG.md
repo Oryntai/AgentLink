@@ -4,6 +4,7 @@ All notable changes to AgentLink are documented here.
 
 ## Unreleased
 
+- Added a desktop application: an Electron window that reads link status, the peer's identity with its key fingerprint and verification state, pending requests, and the metadata-only activity ring straight from the local broker in the main process. The renderer is sandboxed behind a context bridge whose only capability is asking for a snapshot, so the window never touches the broker socket and shows no message text. `npm run desktop:web` keeps the older headless page for a machine without a display.
 - Added broker protocol negotiation: frontends check the running broker's protocol version, its advertised client range, and its method list before using it, so a restarted MCP process can no longer talk to an older broker that lacks its RPCs.
 - Added authenticated graceful takeover: an incompatible broker requeues its in-flight leases, refuses new work while draining, and exits so the newer frontend can start a replacement. A handover is not a failed delivery attempt and never consumes the claim-attempt budget.
 - Added `npm run stop-broker` for the one legacy transition, which verifies the target over the local endpoint, prints the pid and command line, and requires an explicit confirmation. Automatic replacement uses authenticated takeover only and never signals a pid read from a file.

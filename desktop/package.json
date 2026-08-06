@@ -1,0 +1,6 @@
+{
+  "name": "agent-link-desktop",
+  "private": true,
+  "type": "module",
+  "main": "main.js"
+}

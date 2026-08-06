@@ -36,7 +36,8 @@
     "peer-ask": "node scripts/peer-ask.js",
     "notifications": "node scripts/configure-notifications.js",
     "watch": "node scripts/watch.js",
-    "desktop": "node scripts/desktop.js",
+    "desktop": "electron desktop",
+    "desktop:web": "node scripts/desktop.js",
     "report": "node scripts/report.js",
     "report:all": "node scripts/report-all.js",
     "doctor": "node scripts/doctor.js",
@@ -50,5 +51,8 @@
     "@ngrok/ngrok": "^1.7.0",
     "ws": "^8.18.3",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "electron": "^43.3.0"
   }
 }
