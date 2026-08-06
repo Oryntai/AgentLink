@@ -1,4 +1,8 @@
+import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { BrokerClient } from "../src/broker-client.js";
@@ -209,9 +213,50 @@ const server = http.createServer(async (request, response) => {
   response.end("not found");
 });
 
-server.listen(port, host, () => {
-  console.log(`AgentLink Desktop listening on http://${host}:${port}`);
+// A chromeless window with its own taskbar entry, using the browser engine that
+// is already installed. This is an application window, not a native app: there
+// is no tray, no menu bar, and no packaging.
+function findBrowser() {
+  const candidates = process.platform === "win32"
+    ? [
+      path.join(process.env["ProgramFiles(x86)"] || "", "Microsoft/Edge/Application/msedge.exe"),
+      path.join(process.env.ProgramFiles || "", "Microsoft/Edge/Application/msedge.exe"),
+      path.join(process.env.ProgramFiles || "", "Google/Chrome/Application/chrome.exe"),
+      path.join(process.env["ProgramFiles(x86)"] || "", "Google/Chrome/Application/chrome.exe"),
+    ]
+    : [
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/usr/bin/google-chrome",
+      "/usr/bin/microsoft-edge",
+      "/usr/bin/chromium",
+    ];
+  return candidates.find((candidate) => candidate && existsSync(candidate)) || null;
+}
+
+async function openWindow(url) {
+  const browser = findBrowser();
+  if (!browser) {
+    console.log("No Chromium-based browser found; open the address above yourself.");
+    return null;
+  }
+  const profile = await mkdtemp(path.join(os.tmpdir(), "agent-link-desktop-"));
+  const child = spawn(browser, [
+    `--app=${url}`,
+    `--user-data-dir=${profile}`,
+    "--window-size=980,860",
+    "--no-first-run",
+    "--no-default-browser-check",
+  ], { detached: true, stdio: "ignore" });
+  child.unref();
+  return child;
+}
+
+server.listen(port, host, async () => {
+  const url = `http://${host}:${port}`;
+  console.log(`AgentLink Desktop listening on ${url}`);
   console.log(`Config: ${configPath}`);
+  if (process.env.AGENT_LINK_DESKTOP_NO_WINDOW !== "1") await openWindow(url);
 });
 
 async function shutdown() {
