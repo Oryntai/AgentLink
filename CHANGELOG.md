@@ -2,6 +2,19 @@
 
 All notable changes to AgentLink are documented here.
 
+## 0.4.0 - 2026-08-06
+
+- Added one singleton local broker per owner so multiple Codex or Claude tasks no longer replace each other's remote connection.
+- Added an identity-authenticated local IPC layer, encrypted durable inbox, claim leases, deadlines, receipts, and sender-scoped request idempotency with cached response replay.
+- Added `peer_inbox_list` and `peer_inbox_claim` for requests that arrive while no model task is listening.
+- Added nonblocking `peer_request_send` and task-scoped `peer_request_status`, including acknowledged-result retention and recovery after a blocking `peer_ask` timeout.
+- Embedded safe-checkpoint inbox/status rules directly in MCP instructions so agents know when to drain work without tight polling.
+- Added local desktop notifications and optional count-only HTTPS/ntfy phone notifications without exposing request text or stable request identifiers to the push provider.
+- Added an experimental metadata-only `npm run watch` process for Claude Code harnesses that can wake a live task on background-process completion.
+- Added deterministic routing across explicit task, workspace, tags, and oldest matching pending claim.
+- Kept headless model spawning disabled; AgentLink still uses subscription-backed clients and never invokes a model API.
+- Added regression coverage for multi-task claims, inbox draining, deduplication, notification configuration, and broker-backed hot reload.
+
 ## 0.3.0 - 2026-08-04
 
 - Added a permanent MCP installation backed by hot-reloaded `.agent-link/active.json`.

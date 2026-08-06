@@ -23,7 +23,7 @@ The client sends `hello` with:
 - Ed25519 public key;
 - room-secret proof for that agent ID and key.
 
-The relay accepts at most two agent IDs per room, binds each ID to its first public key, replaces an older socket owned by the same ID, and returns the other participant's public key and proof.
+The relay accepts at most two agent IDs per room, binds each ID to its first public key, and returns the other participant's public key and proof. v0.4 normally creates one remote socket from each owner's singleton broker. During upgrades, multiple sockets with the same authenticated agent ID may coexist so older GUI tasks cannot evict the broker.
 
 ## Message envelope
 
@@ -64,13 +64,30 @@ Only the initiator proposes the first structured goal. The responder explicitly 
 
 Ad-hoc read-only questions do not require a structured-goal handshake:
 
-1. `peer_ask` sends an encrypted `request` payload with a unique message ID and waits for a correlated response.
+1. `peer_ask` sends an encrypted `request` payload with a sender-scoped idempotency key, routing key, deadline, and unique envelope ID, then waits for a correlated response.
 2. `peer_listen` returns that request to the responder model.
 3. The responder leaves AgentLink and uses only its own local read-only tools to inspect files, schemas, or database rows.
 4. `peer_respond` sends an encrypted `response` whose protected metadata contains `replyTo: <request-id>`.
 5. Only the matching `peer_ask` waiter consumes that response. The responder calls `peer_listen` again.
 
-This correlation permits both agents to ask simultaneously without pairing a request with the wrong answer. AgentLink still transports natural-language text only; it never proxies the responder's filesystem, shell, database connection, or tools.
+This correlation permits both agents to ask simultaneously without pairing a request with the wrong answer. Replaying a completed idempotency key returns a cached response; replaying an in-flight key returns its current receipt instead of duplicating work. AgentLink still transports natural-language text only; it never proxies the responder's filesystem, shell, database connection, or tools.
+
+The sender may use blocking `peer_ask` or nonblocking `peer_request_send`. Both create the same durable outbound request object. `peer_request_status(requestId)` exposes its full receipt lifecycle and response body when terminal. Without an ID it returns body-free, unacknowledged summaries scoped to the calling task; cross-task recovery is explicit. Fetching a terminal object acknowledges it without deleting it, and acknowledged results remain directly fetchable during the response-cache grace period.
+
+## Owner broker and inbox
+
+Each owner runs one local broker for a participant config. GUI tasks connect as authenticated local MCP frontends over a named pipe on Windows or Unix socket elsewhere. The broker owns the remote WebSocket, encrypts its durable inbox at rest, and routes a request only to a frontend with a pending claim.
+
+Encrypted request metadata may contain:
+
+- `requestId`: sender-scoped idempotency key;
+- `routingKey`: optional explicit task ID, workspace hint, or tags;
+- `deadline`: absolute UTC expiry;
+- `displayName`: local notification label.
+
+The outbound lifecycle uses `queued_local`, `relay_acked`, `queued`, `claimed`, `processing`, `declined`, `expired`, or `responded`. A relay acceptance only proves the ciphertext reached the relay; an owner receipt proves the peer broker decrypted and persisted it.
+
+Requests move through `queued -> claimed(lease) -> responded`. Frontend disconnect, cancellation, or lease expiry requeues the request. Repeated failed claims move it to a local dead-letter state and emit a declined receipt. An expired deadline emits an expired receipt. Among pending claims, routing specificity wins (`taskId > workspace > tags`), then the oldest waiter.
 
 ## Active-config hot reload
 
@@ -78,9 +95,9 @@ GUI clients register one permanent MCP command against `.agent-link/active.json`
 
 ## Local ownership
 
-GUI applications may create several MCP processes. The active task keeps an eager persistent bridge. If a newer local process connects with the same agent ID, the relay closes the older socket with code `4006`; the older process marks itself superseded and does not reconnect.
+GUI applications may create several MCP processes. They register ephemeral frontend/task identities with the single broker instead of opening competing relay sockets. An unarmed task is never treated as available. Standard MCP cannot inject a new model turn into an unarmed GUI; such requests remain in the inbox and notify the owner. Experimental client-specific notification modes are capabilities, not portable wake guarantees.
 
-Claude Code channel mode additionally emits inbound events so a background session can wake without a pending blocking listen call.
+The optional Claude Code watcher is a local frontend with `wakeMode=background_watcher`. It waits for queue metadata without claiming or printing the request body, exits once, and relies on experimentally observed harness behavior to surface that process completion to the model. The awakened task must still claim the inbox item explicitly. Failure to wake never removes the request from the broker inbox.
 
 ## Resource limits
 

@@ -37,8 +37,10 @@ await check("Local participant configs", async () => {
   const available = (await readdir(configDir)).filter(
     (name) =>
       name.endsWith(".json") &&
+      !name.startsWith("notifications") &&
       !name.endsWith(".state.json") &&
-      !name.endsWith(".trust.json"),
+      !name.endsWith(".trust.json") &&
+      !name.endsWith(".broker.json"),
   );
   const files = available.includes("active.json") ? ["active.json"] : available;
   if (!files.length) throw new Error("no participant configs found");

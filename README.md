@@ -7,7 +7,7 @@ AgentLink is an encrypted persistent bridge between two local coding agents. It 
 
 AgentLink does **not** call a model API. Each agent continues to run through its owner's existing Codex or Claude subscription and local GUI/CLI client.
 
-> Status: experimental v0.3. Use it for trusted peer collaboration and review the security notes before exposing a relay outside a private network.
+> Status: experimental v0.4. Use it for trusted peer collaboration and review the security notes before exposing a relay outside a private network.
 
 ## Why AgentLink
 
@@ -15,8 +15,10 @@ Two developers often have access to different repositories, databases, or enviro
 
 - No coordinator agent and no shared machine.
 - Messages look like normal user messages to both agents.
+- A singleton owner-side broker keeps the encrypted link and inbox alive across GUI tasks.
 - A blocking request suspends the asking tool call without generating model tokens.
 - The responder leaves `peer_listen`, performs local read-only work, replies, and listens again.
+- Requests received without a listener remain in an encrypted local inbox and trigger an owner notification.
 - A permanent MCP installation hot-reloads `.agent-link/active.json`; new rooms do not require a GUI restart.
 - Completing one structured goal leaves the encrypted transport connected for later questions.
 - The remote peer never receives direct access to local files, terminals, databases, or tools.
@@ -24,12 +26,12 @@ Two developers often have access to different repositories, databases, or enviro
 ## Architecture
 
 ```text
-Codex / Claude A                                       Codex / Claude B
+Codex / Claude tasks A                                  Codex / Claude tasks B
        |                                                       |
-       | stdio MCP                                      stdio MCP |
+       | stdio MCP frontends                         stdio MCP frontends |
        v                                                       v
- local AgentLink bridge <--- encrypted WebSocket relay ---> local AgentLink bridge
-       |                                                       |
+ singleton local broker <--- encrypted WebSocket relay ---> singleton local broker
+       | encrypted inbox + notifications       encrypted inbox + notifications |
        v                                                       v
  local read-only tools                                  local read-only tools
 ```
@@ -42,11 +44,11 @@ The wire format and state machine are documented in [Protocol](docs/PROTOCOL.md)
 
 | Client | Waiting model |
 | --- | --- |
-| Codex Desktop | `peer_ask` remains pending while the responder handles the request; `peer_listen` wakes on an inbound request. |
-| Claude Desktop | Uses the same request/listen cycle. A new idle GUI chat cannot currently be awakened by standard MCP. |
-| Claude Code | Experimental channel mode can deliver an inbound event to a background session. |
+| Codex Desktop | `peer_ask` remains pending while the responder handles the request. `peer_listen` can wake only the task that armed that pending call. Otherwise the request goes to the inbox and owner notification. |
+| Claude Desktop | Uses the same request/listen/inbox cycle. Standard MCP cannot inject a new turn into an unarmed idle GUI chat. |
+| Claude Code | Uses the same portable cycle. Experimental channel delivery may be enabled, but it is client-specific and must not be treated as a generic MCP wake guarantee. |
 
-For GUI-to-GUI use, start one task in each application once. Keep the responder task inside `peer_listen`; it returns to the model only when work arrives.
+AgentLink never claims it can wake every GUI. Same-context automatic handling requires that task to arm `peer_listen` or a supported client-specific watcher. Without one, delivery is encrypted mail: the broker queues it, notifies the owner, and the owner resumes a task to claim it.
 
 ## Requirements
 
@@ -92,7 +94,7 @@ Valid clients are `codex`, `claude-desktop`, and `claude` for Claude Code. The j
 
 ### 4. One final restart, then hot reload
 
-After the first AgentLink v0.3 installation, fully quit and restart each GUI once so it discovers the permanent MCP. Future `host`, `join`, and `new-session` commands update `active.json` and switch the already running MCP in place. Press `Ctrl+C` in the host terminal when the persistent link is no longer needed.
+After the first AgentLink v0.4 installation, fully quit and restart each GUI once so it discovers the permanent MCP and owner broker. Future `host`, `join`, and `new-session` commands update `active.json` and switch the already running broker in place. Press `Ctrl+C` in the host terminal when the relay URL is no longer needed; queued local inbox data remains encrypted on disk.
 
 ## Optional relay modes
 
@@ -104,7 +106,7 @@ For an always-on public relay, deploy the included `render.yaml` or Dockerfile. 
 
 Then use the advanced `create-room` and `join-room` commands with `ws://127.0.0.1:8787/ws`. See [Remote setup](docs/REMOTE_SETUP.md) for permanent and private alternatives.
 
-For Claude Code's experimental background channel, add `--channel` to `host` or `join`, then launch:
+For Claude Code's experimental channel notification, add `--channel` to `host` or `join`, then launch:
 
 ```powershell
 claude --dangerously-load-development-channels server:agent-link
@@ -125,6 +127,59 @@ Use peer_ask to ask the AgentLink peer which requirements apply to this feature.
 ```
 
 The asking MCP call stays pending without model generation. The responder's `peer_listen` returns the question, the responder performs local reads outside AgentLink, and `peer_respond` completes the original call. Request IDs prevent simultaneous questions from consuming the wrong answer.
+
+When the answer does not block current work, use the nonblocking path:
+
+```text
+Call peer_request_send with the question, save its request_id, and continue the current work unit. At the next safe checkpoint call peer_request_status with that request_id and incorporate the response if ready.
+```
+
+`peer_request_status` without an ID returns compact unacknowledged summaries for the calling task and never dumps response bodies. Fetching one terminal request by ID returns its body or failure and marks it acknowledged; it remains fetchable by ID for seven days. Use `all_tasks: true` only after an owner notification or when deliberately recovering work from another closed task.
+
+Every AgentLink-enabled task follows these checkpoints:
+
+- check inbound inbox and outstanding outbound statuses when the task starts;
+- check again after each substantial work unit and before the final answer;
+- check immediately after an owner notification;
+- never poll in a tight loop; when waiting is useful, prefer one `peer_request_status` call with `wait_seconds`.
+
+`peer_ask` is the blocking convenience form of send plus status wait. If its wait times out, it returns the stable request ID and current state instead of losing the request; collect it later with `peer_request_status`.
+
+If no task is listening, the request stays in the broker inbox. A resumed agent can use:
+
+```text
+Call peer_inbox_list. Claim the relevant request with peer_inbox_claim, perform only the necessary local read-only inspection, and answer with peer_respond.
+```
+
+Both outbound request tools accept optional `request_id`, routing fields, and an absolute deadline. Reusing the same `request_id` with the same question returns the current state or cached result instead of creating duplicate work. Multiple waiting tasks are routed deterministically: explicit task, workspace, tags, then the oldest matching claim.
+
+## Owner notifications
+
+Local desktop notifications are enabled by default and contain only the peer alias, never request text, credentials, or a room code. Disable them with:
+
+```powershell
+npm run notifications -- --local false
+```
+
+An optional phone adapter can send count-only notifications through an HTTPS webhook. For an ntfy topic:
+
+```powershell
+npm run notifications -- --phone-webhook "https://ntfy.example.com/private-topic" --provider ntfy
+```
+
+The phone provider receives only timing and the number of pending requests. It does not receive the peer alias, request ID, or message body. Treat the webhook URL as a secret; it is stored only in ignored `.agent-link/notifications.json`. Disable phone delivery with `npm run notifications -- --disable-phone`.
+
+### Experimental Claude Code watcher
+
+Claude Code can arm a nonblocking background process instead of parking its model turn inside `peer_listen`:
+
+```powershell
+npm run watch -- --client claude-code
+```
+
+Ask Claude Code to start that command as a harness-tracked background task. It consumes no model tokens while waiting and does not claim or print the request body. When a matching request is queued, the process exits with the request ID; if that Claude Code version turns background-task completion into a new model turn, the agent calls `peer_inbox_claim`, handles the request, responds, and arms a new watcher.
+
+This wake behavior is experimentally observed client behavior, not a stable Claude API or an MCP guarantee. If the harness does not wake, the request remains safely queued and the normal desktop/phone notification path still works.
 
 ## Structured planning sessions
 
@@ -164,6 +219,8 @@ Use AgentLink as the responder. Wait for the proposed goal through peer_goal, ac
 - Ed25519 signs every envelope.
 - An HMAC proof binds each public identity key to the room secret.
 - Replay IDs survive local MCP process restarts.
+- The singleton broker spool and response-deduplication cache are encrypted at rest with a key derived from the local identity.
+- Local broker IPC requires a room-secret proof before a frontend may read or claim inbox entries.
 - Relay rooms, pending messages, and logs have quotas, TTLs, and rotation.
 - Sensitive local JSONL fields are encrypted with a key derived from the local identity key.
 - `ROOM_CODE`, `active.json`, identity keys, state, trust files, logs, and reports live under `.agent-link/`, which is ignored by Git.
@@ -176,6 +233,7 @@ The relay can observe connection metadata and message sizes. AgentLink does not 
 
 ```powershell
 npm run doctor
+npm run notifications -- --local true
 npm run report:all
 npm run smoke
 ./scripts/stop-relay.ps1

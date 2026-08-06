@@ -111,13 +111,21 @@ function socketKey(roomId, agentId) {
   return `${roomId}:${agentId}`;
 }
 
+function socketsFor(roomId, agentId) {
+  return sockets.get(socketKey(roomId, agentId)) || new Set();
+}
+
+function sendToAgent(roomId, agentId, message) {
+  for (const socket of socketsFor(roomId, agentId)) send(socket, message);
+}
+
 function deliverPending(roomId, recipientId) {
   const room = rooms.get(roomId);
-  const recipient = sockets.get(socketKey(roomId, recipientId));
-  if (!room || !recipient) return;
+  const recipients = socketsFor(roomId, recipientId);
+  if (!room || recipients.size === 0) return;
   for (const envelope of room.pending.values()) {
     if (envelope.from !== recipientId && (!envelope.to || envelope.to === recipientId)) {
-      send(recipient, { type: "message", envelope });
+      for (const recipient of recipients) send(recipient, { type: "message", envelope });
     }
   }
 }
@@ -205,9 +213,9 @@ wss.on("connection", (ws) => {
       room.memberLastSeen.set(agentId, Date.now());
       room.lastActivity = Date.now();
       const key = socketKey(roomId, agentId);
-      const previous = sockets.get(key);
-      if (previous && previous !== ws) previous.close(4006, "replaced by reconnect");
-      sockets.set(key, ws);
+      const agentSockets = sockets.get(key) || new Set();
+      agentSockets.add(ws);
+      sockets.set(key, agentSockets);
       schedulePersist();
       await log.write("client_connected", identity);
       send(ws, {
@@ -224,7 +232,7 @@ wss.on("connection", (ws) => {
       });
       for (const member of room.members) {
         if (member !== agentId) {
-          send(sockets.get(socketKey(roomId, member)), {
+          sendToAgent(roomId, member, {
             type: "peer_status",
             agentId,
             publicKey,
@@ -290,7 +298,7 @@ wss.on("connection", (ws) => {
           messageId: message.id,
           recipient: identity.agentId,
         });
-        send(sockets.get(socketKey(identity.roomId, envelope.from)), {
+        sendToAgent(identity.roomId, envelope.from, {
           type: "delivery_ack",
           id: message.id,
           recipient: identity.agentId,
@@ -306,7 +314,9 @@ wss.on("connection", (ws) => {
     clearTimeout(helloTimer);
     if (!identity) return;
     const key = socketKey(identity.roomId, identity.agentId);
-    if (sockets.get(key) === ws) sockets.delete(key);
+    const agentSockets = sockets.get(key);
+    agentSockets?.delete(ws);
+    if (agentSockets?.size === 0) sockets.delete(key);
     await log.write("client_disconnected", identity);
     const room = rooms.get(identity.roomId);
     if (room) {
@@ -314,9 +324,10 @@ wss.on("connection", (ws) => {
       room.memberLastSeen.set(identity.agentId, Date.now());
       schedulePersist();
     }
-    for (const member of room?.members || []) {
-      if (member !== identity.agentId) {
-        send(sockets.get(socketKey(identity.roomId, member)), {
+    if (!sockets.has(key)) {
+      for (const member of room?.members || []) {
+        if (member === identity.agentId) continue;
+        sendToAgent(identity.roomId, member, {
           type: "peer_status",
           agentId: identity.agentId,
           publicKey: room.memberKeys.get(identity.agentId),
@@ -340,7 +351,7 @@ const cleanupTimer = setInterval(async () => {
       }
     }
     const hasOnlineMember = [...room.members].some((member) =>
-      sockets.has(socketKey(roomId, member)),
+      socketsFor(roomId, member).size > 0,
     );
     if (!hasOnlineMember && now - room.lastActivity > limits.roomTtlMs) {
       rooms.delete(roomId);
@@ -365,7 +376,9 @@ server.listen(port, host, () => {
 async function shutdown(signal) {
   await log.write("relay_stopping", { signal });
   clearInterval(cleanupTimer);
-  for (const ws of sockets.values()) ws.close(1001, "server shutdown");
+  for (const agentSockets of sockets.values()) {
+    for (const ws of agentSockets) ws.close(1001, "server shutdown");
+  }
   await flushPersist();
   await log.flush();
   server.close(() => process.exit(0));

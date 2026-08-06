@@ -19,9 +19,10 @@ function delay(ms) {
 }
 
 export class BridgeClient extends EventEmitter {
-  constructor(config) {
+  constructor(config, options = {}) {
     super();
     this.config = config;
+    this.manualAck = Boolean(options.manualAck);
     this.ws = null;
     this.online = false;
     this.closed = false;
@@ -266,7 +267,7 @@ export class BridgeClient extends EventEmitter {
         text: received.text,
         metadata: received.metadata,
       });
-      this.#sendRaw({ type: "message_ack", id: envelope.id });
+      if (!this.manualAck) this.#sendRaw({ type: "message_ack", id: envelope.id });
       this.#deliver(received);
       this.emit("message", received);
     } catch (error) {
@@ -417,6 +418,10 @@ export class BridgeClient extends EventEmitter {
   discard(messageId) {
     const index = this.inbox.findIndex((message) => message.id === messageId);
     if (index >= 0) this.inbox.splice(index, 1);
+  }
+
+  ack(messageId) {
+    this.#sendRaw({ type: "message_ack", id: messageId });
   }
 
   async #loadTrust() {

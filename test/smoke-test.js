@@ -200,8 +200,18 @@ try {
   const replacement = new BridgeClient(aliceConfig);
   await replacement.connect();
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.equal(alice.status().superseded, true);
+  assert.equal(alice.status().connected, true);
   assert.equal(replacement.status().connected, true);
+  await bobReconnected.send("Both local MCP tasks stay connected", {
+    kind: "chat",
+    metadata: { displayName: "Bob Claude" },
+  });
+  const [originalCopy, replacementCopy] = await Promise.all([
+    alice.wait({ kinds: ["chat"], timeoutMs: 2_000 }),
+    replacement.wait({ kinds: ["chat"], timeoutMs: 2_000 }),
+  ]);
+  assert.equal(originalCopy.text, "Both local MCP tasks stay connected");
+  assert.equal(replacementCopy.text, "Both local MCP tasks stay connected");
   await replacement.close();
 
   await new Promise((resolve) => setTimeout(resolve, 150));
@@ -217,7 +227,7 @@ try {
   assert.doesNotMatch(aliceLog, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.doesNotMatch(relayState, new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 
-  console.log("SMOKE PASS: encryption, simultaneous exchange, offline queue, completion, redaction, and single-owner reconnect verified");
+  console.log("SMOKE PASS: encryption, simultaneous exchange, offline queue, completion, redaction, and multi-task delivery verified");
   console.log(`TEST_LOG_DIR=${path.join(tempDir, "logs")}`);
 } finally {
   await Promise.allSettled([alice?.close(), bob?.close(), bobReconnected?.close()]);
