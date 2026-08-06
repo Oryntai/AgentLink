@@ -36,6 +36,7 @@
     "peer-ask": "node scripts/peer-ask.js",
     "notifications": "node scripts/configure-notifications.js",
     "watch": "node scripts/watch.js",
+    "desktop": "node scripts/desktop.js",
     "report": "node scripts/report.js",
     "report:all": "node scripts/report-all.js",
     "doctor": "node scripts/doctor.js",
