@@ -40,6 +40,7 @@ async function readState() {
       configPath,
       status,
       activity: activity.activity || [],
+      invites: await client.listInvites().then((r) => r.invites).catch(() => []),
       inbox: inbox.map((entry) => ({
         requestId: entry.requestId,
         state: entry.state,
@@ -86,6 +87,26 @@ function createWindow() {
 }
 
 ipcMain.handle("agentlink:state", () => readState());
+
+// Actions the window is allowed to take. Each one returns a plain result or a
+// plain error string; the renderer never sees a broker object.
+const actions = {
+  createRoom: (client, payload) => client.createRoom(payload.name),
+  joinRoom: (client, payload) => client.joinRoom(payload.invite),
+  createInvite: (client, payload) => client.createInvite({ label: payload.label }),
+  revokeInvite: (client, payload) => client.revokeInvite(payload.inviteId),
+  verifyPeer: (client, payload) => client.verifyPeer(payload.fingerprint),
+};
+
+ipcMain.handle("agentlink:action", async (event, name, payload = {}) => {
+  const action = actions[name];
+  if (!action) return { ok: false, error: `Unknown action: ${name}` };
+  try {
+    return { ok: true, result: await action(await ensureBroker(), payload) };
+  } catch (error) {
+    return { ok: false, error: error.message };
+  }
+});
 
 app.on("window-all-closed", () => app.quit());
 app.on("activate", () => {

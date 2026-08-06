@@ -5,6 +5,7 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brokerEndpoint } from "./broker-endpoint.js";
+import { loadBridgeConfig } from "./config.js";
 import { JsonlLogger } from "./logger.js";
 import {
   BROKER_PROTOCOL_VERSION,
@@ -316,8 +317,35 @@ export class BrokerClient extends EventEmitter {
     this.emit("disconnected");
   }
 
-  async call(method, params = {}, { timeoutMs = 10_000, skipConnect = false } = {}) {
+  // A room change rotates the room secret, so the broker drops every frontend's
+  // authentication: the proof they registered with no longer means anything.
+  // Reload the config from disk and register again with the new secret.
+  async #reauthenticate() {
+    this.config = await loadBridgeConfig(this.config.configPath);
+    await this.call(
+      "register",
+      { frontend: this.frontend, proof: this.#localProof(this.frontend.frontendId) },
+      { timeoutMs: 5_000, skipConnect: true, noRetry: true },
+    );
+    await this.log.write("broker_reauthenticated", { roomId: this.config.roomId });
+  }
+
+  async call(method, params = {}, options = {}) {
+    const { timeoutMs = 10_000, skipConnect = false, noRetry = false } = options;
     if (!skipConnect) await this.connect();
+    if (!noRetry) {
+      try {
+        return await this.#send(method, params, { timeoutMs });
+      } catch (error) {
+        if (!error.remote || !/must register/i.test(error.message)) throw error;
+        await this.#reauthenticate();
+        return this.#send(method, params, { timeoutMs });
+      }
+    }
+    return this.#send(method, params, { timeoutMs });
+  }
+
+  async #send(method, params, { timeoutMs }) {
     if (!this.socket || this.socket.destroyed) throw new Error("Local AgentLink broker is unavailable");
     const id = randomUUID();
     const response = new Promise((resolve, reject) => {
@@ -387,6 +415,30 @@ export class BrokerClient extends EventEmitter {
 
   activityTail(limit = 100) {
     return this.call("activity_tail", { limit });
+  }
+
+  createRoom(name) {
+    return this.call("room_create", { name }, { timeoutMs: 20_000 });
+  }
+
+  joinRoom(invite) {
+    return this.call("room_join", { invite }, { timeoutMs: 20_000 });
+  }
+
+  createInvite(options = {}) {
+    return this.call("invite_create", options, { timeoutMs: 20_000 });
+  }
+
+  listInvites() {
+    return this.call("invite_list");
+  }
+
+  revokeInvite(inviteId) {
+    return this.call("invite_revoke", { inviteId });
+  }
+
+  verifyPeer(fingerprint) {
+    return this.call("peer_verify", { fingerprint });
   }
 
   claimInbox(requestId) {

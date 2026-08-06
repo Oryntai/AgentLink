@@ -25,7 +25,16 @@ export const CORE_BROKER_METHODS = Object.freeze([
   "discard",
 ]);
 
-export const DESKTOP_BROKER_METHODS = Object.freeze([...CORE_BROKER_METHODS, "activity_tail"]);
+export const DESKTOP_BROKER_METHODS = Object.freeze([
+  ...CORE_BROKER_METHODS,
+  "activity_tail",
+  "room_create",
+  "room_join",
+  "invite_create",
+  "invite_list",
+  "invite_revoke",
+  "peer_verify",
+]);
 
 export const BROKER_METHODS = DESKTOP_BROKER_METHODS;
 

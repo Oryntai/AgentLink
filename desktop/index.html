@@ -55,6 +55,24 @@
   tr:last-child td { border-bottom: 0; }
   .empty { padding: 16px; color: var(--muted); }
   footer { padding: 0 22px 26px; color: var(--muted); font-size: 12px; }
+  .actions { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+  input {
+    flex: 1; min-width: 0; padding: 7px 10px; border-radius: 7px; font: inherit; font-size: 13px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
+  }
+  button {
+    padding: 7px 13px; border-radius: 7px; font: inherit; font-size: 13px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--bg); color: var(--ink); white-space: nowrap;
+  }
+  button:hover:not(:disabled) { border-color: var(--muted); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .msg { padding: 0 16px 12px; font-size: 13px; min-height: 0; }
+  .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
+  .code {
+    margin: 0 16px 12px; padding: 10px 12px; border-radius: 7px; background: var(--bg);
+    border: 1px solid var(--line); font-family: ui-monospace, monospace; font-size: 12px;
+    word-break: break-all; user-select: all;
+  }
 </style>
 </head>
 <body>
@@ -64,8 +82,30 @@
   <span class="path" id="config"></span>
 </header>
 <main>
-  <section><h2>Link</h2><div class="rows" id="link-rows"></div></section>
-  <section><h2>Peer</h2><div class="rows" id="peer-rows"></div></section>
+  <section>
+    <h2>Room</h2>
+    <div class="rows" id="link-rows"></div>
+    <div class="actions">
+      <input id="room-name" placeholder="Room name, e.g. Project X" maxlength="64">
+      <button id="create-room">Create room</button>
+    </div>
+    <div class="actions">
+      <input id="invite-input" placeholder="Paste an invite code (al1...)">
+      <button id="join-room">Join by code</button>
+    </div>
+    <div id="room-msg" class="msg"></div>
+  </section>
+  <section>
+    <h2>Peer</h2>
+    <div class="rows" id="peer-rows"></div>
+    <div class="actions"><button id="verify-peer">Confirm this fingerprint</button></div>
+  </section>
+  <section>
+    <h2>Invites</h2>
+    <div class="actions"><button id="create-invite">Create invite</button></div>
+    <div id="invite-code" class="code" hidden></div>
+    <div class="scroll" id="invites"></div>
+  </section>
   <section><h2>Pending requests</h2><div class="scroll" id="inbox"></div></section>
   <section><h2>Activity (metadata only)</h2><div class="scroll" id="activity"></div></section>
 </main>

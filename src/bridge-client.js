@@ -483,6 +483,35 @@ export class BridgeClient extends EventEmitter {
     };
   }
 
+  // The bridge owns the invite registry, so every mutation — issue, revoke and
+  // the redemption inside the handshake — goes through one queue.
+  #onRegistry(task) {
+    const operation = this.registrySaveChain.catch(() => {}).then(async () => {
+      await this.inviteReady;
+      if (!this.inviteRegistry) throw new Error("Invite registry is unavailable");
+      return task(this.inviteRegistry);
+    });
+    this.registrySaveChain = operation.catch(() => {});
+    return operation;
+  }
+
+  async issueInvite({ ttlMs, label } = {}) {
+    return this.#onRegistry((registry) => registry.issue({
+      relayUrl: this.config.relayUrl,
+      roomCode: this.config.roomCode,
+      ttlMs,
+      label: label || this.config.roomName || null,
+    }));
+  }
+
+  async listInvites() {
+    return this.#onRegistry((registry) => registry.list());
+  }
+
+  async revokeInvite(inviteId) {
+    return this.#onRegistry((registry) => registry.revoke(inviteId));
+  }
+
   async markPeerVerified(fingerprint = null) {
     if (!this.boundPeer) throw new Error("No peer is bound to this room yet");
     const actual = this.boundPeer.fingerprint || publicKeyFingerprint(this.boundPeer.publicKey);

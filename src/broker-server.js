@@ -4,10 +4,13 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { applyRoom } from "./agent-configs.js";
 import { writeFileAtomic } from "./atomic-file.js";
 import { BridgeClient } from "./bridge-client.js";
 import { brokerEndpoint } from "./broker-endpoint.js";
 import { loadBridgeConfig } from "./config.js";
+import { createRoomCode } from "./crypto.js";
+import { parseInviteCode } from "./invite-code.js";
 import { decryptLogValue, encryptLogValue } from "./log-crypto.js";
 import { requeueInFlight } from "./lease-state.js";
 import { JsonlLogger } from "./logger.js";
@@ -807,6 +810,7 @@ class LocalBroker {
         broker: true,
         endpoint,
         frontends: this.clients.size,
+        roomName: context.config.roomName || null,
         inbox: context.store.data.messages.filter((entry) => entry.message.kind === "request").length,
         queued: context.store.data.messages.filter((entry) => entry.state === "queued").length,
       };
@@ -863,6 +867,40 @@ class LocalBroker {
           text: entry.message.text,
         }));
     }
+    // Room and invite control. Every agent config on this machine is rewritten
+    // together, because each MCP server was launched with its own file and would
+    // otherwise stay in the previous room while the window shows the new one.
+    if (method === "room_create") {
+      const roomName = String(params.name || "").slice(0, 64) || null;
+      const updated = await applyRoom(path.dirname(context.config.configPath), {
+        roomCode: createRoomCode(),
+        roomName,
+        relayUrl: params.relayUrl || context.config.relayUrl,
+      });
+      await this.reload();
+      return { roomName, agents: updated };
+    }
+    if (method === "room_join") {
+      const invite = parseInviteCode(params.invite);
+      const updated = await applyRoom(path.dirname(context.config.configPath), {
+        roomCode: invite.roomCode,
+        roomName: invite.label,
+        relayUrl: invite.relayUrl,
+        inviteId: invite.inviteId,
+      });
+      await this.reload();
+      return { roomName: invite.label, expiresAt: invite.expiresAt, agents: updated };
+    }
+    if (method === "invite_create") {
+      const invite = await context.bridge.issueInvite({
+        ttlMs: params.ttlMs,
+        label: params.label,
+      });
+      return invite;
+    }
+    if (method === "invite_list") return { invites: await context.bridge.listInvites() };
+    if (method === "invite_revoke") return context.bridge.revokeInvite(params.inviteId);
+    if (method === "peer_verify") return context.bridge.markPeerVerified(params.fingerprint);
     if (method === "activity_tail") {
       const activity = context.store.data.activity || [];
       const limit = Math.min(Math.max(Math.floor(Number(params.limit) || 100), 1), maxActivityEntries);
