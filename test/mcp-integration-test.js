@@ -77,7 +77,20 @@ async function makeClient(name, configPath, onChannel) {
     stderr += chunk.toString("utf8");
   });
   await client.connect(transport);
-  return { client, transport, stderr: () => stderr };
+  // Deferred tool calls are common in this test, and every one of them rejects
+  // when its transport closes during teardown. Attaching a handler up front
+  // keeps that from becoming an unhandled rejection; awaiting still observes it.
+  const callTool = client.callTool.bind(client);
+  client.callTool = (...args) => {
+    const pending = callTool(...args);
+    pending.catch(() => {});
+    return pending;
+  };
+  let exit = null;
+  transport._process?.on("exit", (code, signal) => {
+    exit = { code, signal };
+  });
+  return { client, transport, stderr: () => stderr, exit: () => exit };
 }
 
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-link-mcp-test-"));
@@ -129,6 +142,37 @@ let bob;
 let bobSecond;
 let bobWatcher;
 const channelEvents = [];
+
+function dumpClientStderr() {
+  for (const [name, client] of [
+    ["alice", alice],
+    ["aliceSecond", aliceSecond],
+    ["bob", bob],
+    ["bobSecond", bobSecond],
+  ]) {
+    const output = client?.stderr?.().trim();
+    const exit = client?.exit?.();
+    if (exit) console.error(`--- ${name} MCP exited: code=${exit.code} signal=${exit.signal}`);
+    if (output) console.error(`--- ${name} MCP stderr ---\n${output}`);
+  }
+}
+
+// A deferred callTool promise rejects the moment its transport closes, which
+// happens outside the try block and would otherwise kill the process with no
+// hint about why the MCP child died.
+let tearingDown = false;
+process.on("unhandledRejection", (reason) => {
+  // Closing transports naturally rejects anything still in flight; only a
+  // rejection during the test itself means something is actually wrong.
+  if (tearingDown) {
+    console.error("--- ignored rejection during teardown ---", reason?.message || reason);
+    return;
+  }
+  dumpClientStderr();
+  console.error("--- unhandled rejection ---");
+  console.error(reason);
+  process.exit(1);
+});
 try {
   await waitForRelay(relay);
   alice = await makeClient("alice-test", alicePath);
@@ -539,7 +583,11 @@ try {
   assert.match(textOf(await hotAsk), /switched rooms in place/);
 
   console.log("MCP PASS: async status collection, orphan recovery, timeout recovery, broker inbox, watcher wake, idempotency, multi-task claims, goals, and hot reload verified");
+} catch (error) {
+  dumpClientStderr();
+  throw error;
 } finally {
+  tearingDown = true;
   await Promise.allSettled([
     alice?.client.close(),
     aliceSecond?.client.close(),

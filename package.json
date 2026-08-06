@@ -30,6 +30,7 @@
     "create-room": "node scripts/configure.js create",
     "join-room": "node scripts/configure.js join",
     "install-mcp": "node scripts/install-mcp.js",
+    "stop-broker": "node scripts/stop-broker.js",
     "migrate-identity": "node scripts/migrate-identity.js",
     "new-session": "node scripts/new-session.js",
     "peer-ask": "node scripts/peer-ask.js",
@@ -38,7 +39,7 @@
     "report": "node scripts/report.js",
     "report:all": "node scripts/report-all.js",
     "doctor": "node scripts/doctor.js",
-    "smoke": "node test/smoke-test.js && node test/mcp-integration-test.js && node test/session-script-test.js && node test/setup-lib-test.js && node test/install-mcp-test.js && node test/notification-config-test.js"
+    "smoke": "node test/smoke-test.js && node test/offline-delivery-test.js && node test/handshake-listener-test.js && node test/mcp-integration-test.js && node test/broker-upgrade-test.js && node test/store-migration-test.js && node test/atomic-file-test.js && node test/invite-security-test.js && node test/peer-binding-test.js && node test/session-script-test.js && node test/setup-lib-test.js && node test/install-mcp-test.js && node test/notification-config-test.js"
   },
   "engines": {
     "node": ">=20"

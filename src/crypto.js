@@ -49,6 +49,37 @@ export function identityProof(roomId, secret, agentId, publicKey) {
     .digest("base64url");
 }
 
+export function inviteProof(roomId, secret, inviteId, agentId, publicKey) {
+  return createHmac("sha256", Buffer.from(secret, "utf8"))
+    .update("agent-link-invite-redeem-v1\0")
+    .update(roomId)
+    .update("\0")
+    .update(inviteId)
+    .update("\0")
+    .update(agentId)
+    .update("\0")
+    .update(publicKey)
+    .digest("base64url");
+}
+
+export function verifyInviteProof(roomId, secret, inviteId, agentId, publicKey, proof) {
+  if (!proof || !inviteId) return false;
+  try {
+    const expected = Buffer.from(
+      inviteProof(roomId, secret, inviteId, agentId, publicKey),
+      "base64url",
+    );
+    const received = Buffer.from(proof, "base64url");
+    return expected.length === received.length && timingSafeEqual(expected, received);
+  } catch {
+    return false;
+  }
+}
+
+export function publicKeyFingerprint(publicKey) {
+  return createHash("sha256").update(String(publicKey)).digest("base64url").slice(0, 16);
+}
+
 export function verifyIdentityProof(roomId, secret, agentId, publicKey, proof) {
   if (!proof) return false;
   try {

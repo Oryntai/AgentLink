@@ -34,6 +34,7 @@ function roomForStorage(room) {
     members: [...room.members],
     memberKeys: Object.fromEntries(room.memberKeys || []),
     memberProofs: Object.fromEntries(room.memberProofs || []),
+    memberInvites: Object.fromEntries(room.memberInvites || []),
     memberLastSeen: Object.fromEntries(room.memberLastSeen || []),
     pending: [...room.pending.values()],
     lastActivity: room.lastActivity,
@@ -49,6 +50,7 @@ async function loadState() {
         members: new Set(room.members || []),
         memberKeys: new Map(Object.entries(room.memberKeys || {})),
         memberProofs: new Map(Object.entries(room.memberProofs || {})),
+        memberInvites: new Map(Object.entries(room.memberInvites || {})),
         memberLastSeen: new Map(Object.entries(room.memberLastSeen || {})),
         pending: new Map((room.pending || []).map((item) => [item.id, item])),
         lastActivity: Number(room.lastActivity || Date.now()),
@@ -162,7 +164,7 @@ wss.on("connection", (ws) => {
         ws.close(4002, "hello required");
         return;
       }
-      const { roomId, auth, agentId, role, publicKey, keyProof } = message;
+      const { roomId, auth, agentId, role, publicKey, keyProof, inviteId, inviteProof } = message;
       if (
         !roomId ||
         !auth ||
@@ -185,6 +187,7 @@ wss.on("connection", (ws) => {
           members: new Set(),
           memberKeys: new Map(),
           memberProofs: new Map(),
+          memberInvites: new Map(),
           memberLastSeen: new Map(),
           pending: new Map(),
           lastActivity: Date.now(),
@@ -210,6 +213,14 @@ wss.on("connection", (ws) => {
       room.members.add(agentId);
       room.memberKeys.set(agentId, publicKey);
       room.memberProofs.set(agentId, keyProof);
+      room.memberInvites ||= new Map();
+      // Opaque to the relay: an id plus a proof it cannot compute or verify.
+      if (inviteId && inviteProof) {
+        room.memberInvites.set(agentId, {
+          inviteId: String(inviteId).slice(0, 128),
+          inviteProof: String(inviteProof).slice(0, 256),
+        });
+      }
       room.memberLastSeen.set(agentId, Date.now());
       room.lastActivity = Date.now();
       const key = socketKey(roomId, agentId);
@@ -228,6 +239,7 @@ wss.on("connection", (ws) => {
             agentId: id,
             publicKey: room.memberKeys.get(id),
             keyProof: room.memberProofs.get(id),
+            ...(room.memberInvites?.get(id) || {}),
           })),
       });
       for (const member of room.members) {
@@ -237,6 +249,7 @@ wss.on("connection", (ws) => {
             agentId,
             publicKey,
             keyProof,
+            ...(room.memberInvites?.get(agentId) || {}),
             online: true,
           });
         }

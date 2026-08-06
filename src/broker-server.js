@@ -4,12 +4,21 @@ import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { writeFileAtomic } from "./atomic-file.js";
 import { BridgeClient } from "./bridge-client.js";
 import { brokerEndpoint } from "./broker-endpoint.js";
 import { loadBridgeConfig } from "./config.js";
 import { decryptLogValue, encryptLogValue } from "./log-crypto.js";
+import { requeueInFlight } from "./lease-state.js";
 import { JsonlLogger } from "./logger.js";
 import { notifyIncomingRequest, notifyUncollectedResponse } from "./notifier.js";
+import {
+  BROKER_METHODS,
+  BROKER_PROTOCOL_VERSION,
+  MAX_CLIENT_PROTOCOL_VERSION,
+  MIN_CLIENT_PROTOCOL_VERSION,
+} from "./protocol-version.js";
+import { activityLimit, migrateStore, recordActivity } from "./store-migration.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = path.resolve(
@@ -27,9 +36,12 @@ const responseCacheGraceMs = Number(
   process.env.AGENT_LINK_RESPONSE_CACHE_GRACE_MS || 7 * 24 * 60 * 60 * 1_000,
 );
 const maxOutboundRequests = Number(process.env.AGENT_LINK_MAX_OUTBOUND_REQUESTS || 1_000);
+const runtimePath = `${configPath}.broker-runtime.json`;
+const brokerMethods = Object.freeze([...BROKER_METHODS]);
+const maxActivityEntries = activityLimit(process.env.AGENT_LINK_MAX_ACTIVITY_ENTRIES);
 
 function initialData() {
-  return { version: 1, messages: [], outbound: {}, completed: {} };
+  return migrateStore({}, { maxActivity: maxActivityEntries });
 }
 
 class EncryptedBrokerStore {
@@ -38,23 +50,26 @@ class EncryptedBrokerStore {
     this.keyMaterial = keyMaterial;
     this.data = initialData();
     this.chain = Promise.resolve();
+    this.dirty = false;
+  }
+
+  // Activity is a metadata log, not part of the message state machine, so it
+  // rides along with the next real save instead of putting a full re-encrypt on
+  // the path of every message.
+  markDirty() {
+    this.dirty = true;
   }
 
   async load() {
     try {
       const stored = JSON.parse(await readFile(this.filePath, "utf8"));
-      this.data = decryptLogValue(this.keyMaterial, stored.payload);
-      this.data.messages ||= [];
-      this.data.outbound ||= {};
-      this.data.completed ||= {};
-      for (const entry of this.data.messages) {
-        if (entry.state === "claimed") {
-          entry.state = "queued";
-          delete entry.claimedBy;
-          delete entry.leaseUntil;
-        }
-      }
+      this.data = migrateStore(
+        decryptLogValue(this.keyMaterial, stored.payload),
+        { maxActivity: maxActivityEntries },
+      );
+      const requeued = requeueInFlight(this.data.messages);
       this.cleanup();
+      if (requeued.length) await this.save();
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
@@ -82,17 +97,14 @@ class EncryptedBrokerStore {
 
   save() {
     this.cleanup();
+    this.dirty = false;
     const snapshot = JSON.parse(JSON.stringify(this.data));
     this.chain = this.chain.catch(() => {}).then(async () => {
-      await mkdir(path.dirname(this.filePath), { recursive: true });
-      const temporaryPath = `${this.filePath}.${process.pid}.tmp`;
       const payload = encryptLogValue(this.keyMaterial, snapshot);
-      await writeFile(
-        temporaryPath,
+      await writeFileAtomic(
+        this.filePath,
         `${JSON.stringify({ version: 1, payload }, null, 2)}\n`,
-        { encoding: "utf8", mode: 0o600 },
       );
-      await rename(temporaryPath, this.filePath);
     });
     return this.chain;
   }
@@ -154,6 +166,8 @@ class LocalBroker {
     this.statusWaiters = [];
     this.reloadQueue = Promise.resolve();
     this.idleTimer = null;
+    this.draining = false;
+    this.startedAt = new Date().toISOString();
     this.log = new JsonlLogger(
       path.join(path.dirname(configPath), "logs", "broker.jsonl"),
       { component: "broker", configPath },
@@ -215,6 +229,12 @@ class LocalBroker {
   }
 
   async #sendReceipt(context, id, state, reason = null) {
+    recordActivity(
+      context.store.data,
+      { kind: "inbound", messageKind: "request", requestId: id, state, reason },
+      maxActivityEntries,
+    );
+    context.store.markDirty();
     try {
       await context.bridge.send(state, {
         kind: "receipt",
@@ -240,6 +260,16 @@ class LocalBroker {
     const previous = outbound.receipts.at(-1);
     if (!previous || previous.state !== state || previous.reason !== reason) {
       outbound.receipts.push({ state, reason, ts: timestamp });
+      if (this.context) {
+        recordActivity(this.context.store.data, {
+          ts: timestamp,
+          kind: "outbound",
+          messageKind: "request",
+          requestId: outbound.requestId,
+          state,
+          reason,
+        }, maxActivityEntries);
+      }
     }
     this.#notifyStatusWaiters(outbound.requestId);
   }
@@ -395,6 +425,13 @@ class LocalBroker {
             && waiter.client.frontend.taskId === outbound.ownerTaskId,
         );
         outbound.response = message;
+        recordActivity(store.data, {
+          kind: "inbound",
+          messageKind: "response",
+          requestId: outbound.requestId,
+          peer: message.metadata?.displayName || message.from,
+          state: "received",
+        }, maxActivityEntries);
         this.#recordOutboundState(outbound, "responded", { ts: message.receivedAt });
         await store.save();
         await this.#ack(context, message.id);
@@ -442,6 +479,13 @@ class LocalBroker {
       attempts: 0,
       receivedAt: new Date().toISOString(),
     };
+    recordActivity(store.data, {
+      kind: "inbound",
+      messageKind: message.kind,
+      requestId: entry.requestId,
+      peer: message.metadata?.displayName || message.from,
+      state: "received",
+    }, maxActivityEntries);
     store.data.messages.push(entry);
     await store.save();
     await this.#ack(context, message.id);
@@ -697,6 +741,12 @@ class LocalBroker {
         replyTo: entry.requestId,
       },
     });
+    recordActivity(context.store.data, {
+      kind: "outbound",
+      messageKind: "response",
+      requestId: entry.requestId,
+      state: "sent",
+    }, maxActivityEntries);
     const entryIndex = context.store.data.messages.indexOf(entry);
     if (entryIndex >= 0) context.store.data.messages.splice(entryIndex, 1);
     await context.store.save();
@@ -729,8 +779,18 @@ class LocalBroker {
   }
 
   async #handle(client, method, params) {
+    if (method === "hello") return this.describe();
     await this.reload();
     const context = this.context;
+    if (method === "takeover") {
+      if (!validLocalProof(context.config.secret, params.frontendId, params.proof)) {
+        throw new Error("Local broker authentication failed");
+      }
+      const requeued = await this.beginTakeover(String(params.reason || "frontend upgrade").slice(0, 200));
+      setTimeout(() => void shutdown("takeover"), 10).unref();
+      return { accepted: true, pid: process.pid, requeued };
+    }
+    if (this.draining) throw new Error("Local broker is handing over to a newer instance");
     if (method === "register") {
       const frontend = params.frontend || {};
       if (!validLocalProof(context.config.secret, frontend.frontendId, params.proof)) {
@@ -738,7 +798,7 @@ class LocalBroker {
       }
       client.frontend = { ...frontend };
       client.authenticated = true;
-      return { frontendId: client.frontend.frontendId, endpoint };
+      return { ...this.describe(), frontendId: client.frontend.frontendId };
     }
     if (!client.authenticated) throw new Error("Frontend must register with the local broker");
     if (method === "status") {
@@ -757,6 +817,13 @@ class LocalBroker {
         metadata: params.metadata,
         to: params.to,
       });
+      recordActivity(context.store.data, {
+        kind: "outbound",
+        messageKind: params.kind || "chat",
+        requestId: params.metadata?.requestId || params.metadata?.replyTo || null,
+        state: "sent",
+      }, maxActivityEntries);
+      context.store.markDirty();
       return { messageId };
     }
     if (method === "wait") return this.#wait(client, params);
@@ -796,6 +863,11 @@ class LocalBroker {
           text: entry.message.text,
         }));
     }
+    if (method === "activity_tail") {
+      const activity = context.store.data.activity || [];
+      const limit = Math.min(Math.max(Math.floor(Number(params.limit) || 100), 1), maxActivityEntries);
+      return { activity: activity.slice(-limit), total: activity.length, limit };
+    }
     if (method === "inbox_claim") {
       const entry = context.store.data.messages.find(
         (item) => item.message.kind === "request"
@@ -819,6 +891,34 @@ class LocalBroker {
       return { stopping: true };
     }
     throw new Error(`Unknown broker method: ${method}`);
+  }
+
+  describe() {
+    return {
+      brokerProtocol: BROKER_PROTOCOL_VERSION,
+      minClientProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+      maxClientProtocol: MAX_CLIENT_PROTOCOL_VERSION,
+      methods: brokerMethods,
+      pid: process.pid,
+      startedAt: this.startedAt,
+      draining: this.draining,
+      endpoint,
+    };
+  }
+
+  async noteLifecycle(state, reason = null) {
+    if (!this.context) return;
+    recordActivity(this.context.store.data, { kind: "broker", state, reason }, maxActivityEntries);
+    await this.context.store.save();
+  }
+
+  async beginTakeover(reason) {
+    if (this.draining) return 0;
+    this.draining = true;
+    const requeued = requeueInFlight(this.context?.store.data.messages || []);
+    await this.noteLifecycle("takeover", reason);
+    await this.log.write("broker_takeover", { reason, requeued: requeued.length });
+    return requeued.length;
   }
 
   accept(socket) {
@@ -887,7 +987,7 @@ class LocalBroker {
       clearTimeout(waiter.timer);
       waiter.reject(new Error("Frontend disconnected while checking request status"));
     }
-    for (const entry of this.context?.store.data.messages || []) {
+    for (const entry of this.draining ? [] : this.context?.store.data.messages || []) {
       if (!["claimed", "processing"].includes(entry.state) || entry.claimedBy !== client.id) continue;
       entry.attempts = Number(entry.attempts || 0) + 1;
       entry.state = entry.attempts >= maxClaimAttempts ? "dead_letter" : "queued";
@@ -976,6 +1076,7 @@ class LocalBroker {
     for (const outbound of Object.values(context.store.data.outbound)) {
       await this.#notifyUncollectedIfNeeded(context, outbound);
     }
+    if (context.store.dirty) await context.store.save();
   }
 }
 
@@ -1013,6 +1114,13 @@ await new Promise((resolve, reject) => {
   });
 });
 await broker.reload();
+await broker.noteLifecycle("started");
+await mkdir(path.dirname(runtimePath), { recursive: true });
+await writeFile(
+  runtimePath,
+  `${JSON.stringify(broker.describe(), null, 2)}\n`,
+  { encoding: "utf8", mode: 0o600 },
+);
 void broker.log.write("broker_listening", { endpoint, rootDir });
 
 const reloadTimer = setInterval(() => {
@@ -1027,11 +1135,22 @@ const maintenanceTimer = setInterval(() => {
 }, 5_000);
 maintenanceTimer.unref();
 
+async function clearRuntimeInfo() {
+  try {
+    const current = JSON.parse(await readFile(runtimePath, "utf8"));
+    if (current.pid !== process.pid) return;
+  } catch {
+    return;
+  }
+  await unlink(runtimePath).catch(() => {});
+}
+
 async function shutdown(signal) {
   clearInterval(reloadTimer);
   clearInterval(maintenanceTimer);
   await broker.log.write("broker_stopping", { signal });
   await broker.close();
+  await clearRuntimeInfo();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5_000).unref();
 }
