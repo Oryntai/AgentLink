@@ -129,8 +129,17 @@ document.getElementById("create-invite").addEventListener("click", (event) => {
     const node = document.getElementById("invite-code");
     node.hidden = false;
     node.textContent = result.code;
+    const brief = document.getElementById("invite-brief");
+    brief.hidden = false;
+    brief.textContent = result.instructions || "";
+    document.getElementById("brief-actions").hidden = !result.instructions;
     say(`Invite valid until ${new Date(result.expiresAt).toLocaleTimeString()}. Single use.`, "ok");
   });
+});
+
+document.getElementById("copy-brief").addEventListener("click", async () => {
+  await navigator.clipboard.writeText(document.getElementById("invite-brief").textContent);
+  say("Briefing copied. Paste it to the other owner's agent.", "ok");
 });
 
 document.getElementById("verify-peer").addEventListener("click", (event) => {

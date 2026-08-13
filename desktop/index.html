@@ -68,6 +68,7 @@
   button:disabled { opacity: 0.5; cursor: default; }
   .msg { padding: 0 16px 12px; font-size: 13px; min-height: 0; }
   .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
+  pre.code { white-space: pre-wrap; max-height: 220px; overflow: auto; margin-top: 0; }
   .code {
     margin: 0 16px 12px; padding: 10px 12px; border-radius: 7px; background: var(--bg);
     border: 1px solid var(--line); font-family: ui-monospace, monospace; font-size: 12px;
@@ -104,6 +105,10 @@
     <h2>Invites</h2>
     <div class="actions"><button id="create-invite">Create invite</button></div>
     <div id="invite-code" class="code" hidden></div>
+    <div class="actions" id="brief-actions" hidden>
+      <button id="copy-brief">Copy briefing for their agent</button>
+    </div>
+    <pre id="invite-brief" class="code" hidden></pre>
     <div class="scroll" id="invites"></div>
   </section>
   <section><h2>Pending requests</h2><div class="scroll" id="inbox"></div></section>

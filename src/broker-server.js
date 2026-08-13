@@ -11,6 +11,7 @@ import { brokerEndpoint } from "./broker-endpoint.js";
 import { loadBridgeConfig } from "./config.js";
 import { createRoomCode } from "./crypto.js";
 import { parseInviteCode } from "./invite-code.js";
+import { peerInstructions } from "./peer-instructions.js";
 import { decryptLogValue, encryptLogValue } from "./log-crypto.js";
 import { requeueInFlight } from "./lease-state.js";
 import { JsonlLogger } from "./logger.js";
@@ -896,7 +897,17 @@ class LocalBroker {
         ttlMs: params.ttlMs,
         label: params.label,
       });
-      return invite;
+      // The briefing travels with the code so the other owner does not have to
+      // explain AgentLink to their agent by hand.
+      return {
+        ...invite,
+        instructions: peerInstructions({
+          code: invite.code,
+          roomName: invite.label || context.config.roomName,
+          expiresAt: invite.expiresAt,
+          displayName: context.config.displayName,
+        }),
+      };
     }
     if (method === "invite_list") return { invites: await context.bridge.listInvites() };
     if (method === "invite_revoke") return context.bridge.revokeInvite(params.inviteId);
@@ -1151,14 +1162,16 @@ await new Promise((resolve, reject) => {
     resolve();
   });
 });
-await broker.reload();
-await broker.noteLifecycle("started");
+// Written before the config is loaded: anything that can already reach the
+// endpoint must also be able to read who is answering it.
 await mkdir(path.dirname(runtimePath), { recursive: true });
 await writeFile(
   runtimePath,
   `${JSON.stringify(broker.describe(), null, 2)}\n`,
   { encoding: "utf8", mode: 0o600 },
 );
+await broker.reload();
+await broker.noteLifecycle("started");
 void broker.log.write("broker_listening", { endpoint, rootDir });
 
 const reloadTimer = setInterval(() => {
