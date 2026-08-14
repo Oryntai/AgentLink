@@ -1130,7 +1130,20 @@ class LocalBroker {
 }
 
 const broker = new LocalBroker();
-const server = net.createServer((socket) => broker.accept(socket));
+// The endpoint has to listen before the store is loaded, so a second broker
+// loses the race on the address instead of loading the same state twice. A
+// client must still not be served before that load finished, or it would reach
+// a broker with no context and read a store that is not yet migrated on disk.
+let markReady;
+const ready = new Promise((resolve) => {
+  markReady = resolve;
+});
+const server = net.createServer((socket) => {
+  void ready.then(() => {
+    if (socket.destroyed) return;
+    broker.accept(socket);
+  });
+});
 
 async function removeStaleUnixSocket() {
   if (process.platform === "win32") return;
@@ -1172,6 +1185,7 @@ await writeFile(
 );
 await broker.reload();
 await broker.noteLifecycle("started");
+markReady();
 void broker.log.write("broker_listening", { endpoint, rootDir });
 
 const reloadTimer = setInterval(() => {
