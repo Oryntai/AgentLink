@@ -23,7 +23,21 @@ The client sends `hello` with:
 - Ed25519 public key;
 - room-secret proof for that agent ID and key.
 
-The relay accepts at most two agent IDs per room, binds each ID to its first public key, and returns the other participant's public key and proof. v0.4 normally creates one remote socket from each owner's singleton broker. During upgrades, multiple sockets with the same authenticated agent ID may coexist so older GUI tasks cannot evict the broker.
+The relay accepts at most two agent IDs per room, binds each ID to its first public key, and returns the other participant's public key and proof. One remote socket is normally created from each owner's singleton broker. During upgrades, multiple sockets with the same authenticated agent ID may coexist so older GUI tasks cannot evict the broker.
+
+A client also binds the room locally to the first peer identity and public key that prove membership, and refuses a different one afterwards. That binding does not depend on the relay remembering its own membership state. Inbound relay frames are serialized so the peer is pinned before anything it sent is processed.
+
+## Invites
+
+An invite code is `al1.<base64url-payload>.<checksum>`. The payload is version 2 and carries an invite ID, the relay URL, the room code, the issue and expiry timestamps, and an optional label. It expires after 15 minutes by default and 24 hours at most; a code that is expired, tampered with, or of an unsupported version is refused at parse time.
+
+Redemption happens between the two clients, not at the relay:
+
+1. The joining side presents its invite ID with a room-secret proof over the invite ID, its agent ID, and its public key.
+2. The issuing side verifies that proof, checks the ID against its own registry, and consumes it against the presented public key.
+3. The consumption is recorded durably before the peer is pinned. If the record cannot be written, the consumption is rolled back and the peer is refused.
+
+A replay from a different key is refused; a retry from the same key is idempotent. The relay forwards only the ID and the proof and can compute neither. The registry stores no room code, no room secret, and no invite code. A room may set `requireInvite` to refuse any peer arriving without one.
 
 ## Message envelope
 
@@ -77,6 +91,20 @@ The sender may use blocking `peer_ask` or nonblocking `peer_request_send`. Both 
 ## Owner broker and inbox
 
 Each owner runs one local broker for a participant config. GUI tasks connect as authenticated local MCP frontends over a named pipe on Windows or Unix socket elsewhere. The broker owns the remote WebSocket, encrypts its durable inbox at rest, and routes a request only to a frontend with a pending claim.
+
+### Broker protocol negotiation
+
+Broker protocol version 2 is the minimum. A frontend opens with `hello` and compares the broker's protocol version, its advertised client range, and its method list against what that frontend needs before using it. Required methods are a frontend capability, not one global list: a generic MCP session needs the core methods, while a desktop frontend also needs `activity_tail`, `room_create`, `room_join`, `invite_create`, `invite_list`, `invite_revoke`, and `peer_verify`.
+
+Only an explicit rejection means the broker is too old. Silence is retried and then reported as a transport failure.
+
+An incompatible broker is replaced by authenticated graceful takeover: it requeues its in-flight leases, refuses new work while draining, and exits so the newer frontend can start a replacement. A handover is not a failed delivery attempt and never consumes the claim-attempt budget. Stopping a broker by pid is an operator command (`npm run stop-broker`), never an automatic path.
+
+### Store and activity ring
+
+The encrypted broker store migrates explicitly from version 1 to version 2, which adds a bounded activity ring. Ring entries carry timestamps, kinds, request IDs, peer aliases, states, and reasons only; request text can never enter it. It is read through `activity_tail` and flushed with the next real save or by broker maintenance rather than on the message hot path.
+
+Both in-flight states return to the queue when the store loads, so a broker killed mid-processing cannot strand a request under a dead owner. Trust state is scoped per room in `<config>.<roomId>.trust.json`, imported once from the older shared file when it describes the same room, and merged monotonically under a cross-process lock that reclaims only a dead owner's lock.
 
 Encrypted request metadata may contain:
 

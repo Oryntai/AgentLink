@@ -27,6 +27,12 @@ Persistent mode is an availability mechanism, not standing permission to disclos
 
 The owner broker stores its inbox and response cache as encrypted local files. Its named-pipe or Unix-socket protocol requires an HMAC proof derived from the room secret. This protects against unrelated local users that cannot read the participant config; it does not protect a compromised process running as the owner or any process that can already read `.agent-link/active.json`.
 
+An invite code contains the relay URL and the room code, so anyone holding it can attempt to join until it is used or expires. Treat it as a bearer credential: send it through a private authenticated channel, keep the default short lifetime, and revoke one that was sent to the wrong place. Invites are single use and are redeemed by the issuing side against the joining peer's public key, so a copy of the code cannot admit a second party. A room additionally binds to the first peer identity that proves membership, which means a leaked room code cannot admit a different peer even if the relay forgets its own membership state. Rotating the room is the way to admit someone else, and `requireInvite` refuses any peer that arrives without an invite.
+
+An invite proves that its holder was invited, not who they are. Compare the peer key fingerprint out of band before treating the link as identified; the desktop window shows that fingerprint and records an explicit owner confirmation.
+
+The desktop window reads the local broker over the same authenticated IPC as any other frontend. Its renderer runs with context isolation and no Node integration, cannot navigate, and receives only status, invite metadata, request metadata, and the metadata-only activity ring. It never receives message text.
+
 Local desktop notifications may reveal the configured peer alias on the OS lock screen, depending on operating-system settings. Optional phone webhooks receive only notification timing and a pending count, but that metadata can still reveal activity patterns. The webhook URL is a secret and must use HTTPS.
 
 The temporary ngrok mode terminates public TLS at ngrok and forwards to the relay on localhost. Ngrok can observe transport metadata and encrypted AgentLink frames, but message text remains protected by AgentLink's end-to-end encryption. Treat `NGROK_AUTHTOKEN`, `ROOM_CODE`, and `.agent-link/active.json` as secrets, never commit them, and send the printed join command only through a private authenticated channel.

@@ -7,7 +7,7 @@ AgentLink is an encrypted persistent bridge between two local coding agents. It 
 
 AgentLink does **not** call a model API. Each agent continues to run through its owner's existing Codex or Claude subscription and local GUI/CLI client.
 
-> Status: experimental v0.4. Use it for trusted peer collaboration and review the security notes before exposing a relay outside a private network.
+> Status: experimental v0.5. Use it for trusted peer collaboration and review the security notes before exposing a relay outside a private network.
 
 ## Why AgentLink
 
@@ -20,6 +20,8 @@ Two developers often have access to different repositories, databases, or enviro
 - The responder leaves `peer_listen`, performs local read-only work, replies, and listens again.
 - Requests received without a listener remain in an encrypted local inbox and trigger an owner notification.
 - A permanent MCP installation hot-reloads `.agent-link/active.json`; new rooms do not require a GUI restart.
+- A desktop window reads the link, the peer identity, pending requests, and metadata-only activity from the local broker, and creates or joins rooms without a terminal.
+- Invites are single-use expiring codes, and a room binds to the first peer key that proves membership.
 - Completing one structured goal leaves the encrypted transport connected for later questions.
 - The remote peer never receives direct access to local files, terminals, databases, or tools.
 
@@ -56,6 +58,7 @@ AgentLink never claims it can wake every GUI. Same-context automatic handling re
 - Git
 - Codex Desktop, Claude Desktop, or Claude Code
 - One free ngrok account and authtoken for the temporary relay owner
+- For the desktop window, the Electron dev dependency installed by `npm ci`
 
 ## Quick start: two machines, temporary link
 
@@ -94,7 +97,41 @@ Valid clients are `codex`, `claude-desktop`, and `claude` for Claude Code. The j
 
 ### 4. One final restart, then hot reload
 
-After the first AgentLink v0.4 installation, fully quit and restart each GUI once so it discovers the permanent MCP and owner broker. Future `host`, `join`, and `new-session` commands update `active.json` and switch the already running broker in place. Press `Ctrl+C` in the host terminal when the relay URL is no longer needed; queued local inbox data remains encrypted on disk.
+After the first AgentLink installation, fully quit and restart each GUI once so it discovers the permanent MCP and owner broker. Future `host`, `join`, and `new-session` commands update `active.json` and switch the already running broker in place. Press `Ctrl+C` in the host terminal when the relay URL is no longer needed; queued local inbox data remains encrypted on disk.
+
+## Desktop window
+
+```powershell
+npm run desktop
+```
+
+An Electron window over the local broker. It shows the link state, the room, this agent, the peer's agent ID with its key fingerprint and verification state, pending requests, and a metadata-only activity ring. It never shows message text: the renderer is sandboxed behind a context bridge whose only capabilities are asking for a snapshot and invoking the actions below.
+
+From the window an owner can:
+
+- create a named room on the configured relay and switch every local agent to it;
+- join a room by pasting an invite code;
+- issue a single-use invite together with a paste-ready briefing for the peer owner's agent;
+- revoke an invite that is still pending;
+- confirm the peer's key fingerprint after checking it out of band.
+
+Creating or joining a room rewrites the participant configs and the running broker reloads them, so no GUI or task restart is required. Room creation reuses the relay already configured for that config; start `npm run host` or point the config at a permanent relay first.
+
+On a machine without Electron or without a display, `npm run desktop:web` serves the same view on `http://127.0.0.1:4737` and opens it as a chromeless window in an installed Chromium browser. That page is read-only and has no room, invite, or verification actions.
+
+## Invites and peer binding
+
+An invite code (`al1.…`) carries the relay URL and the room code, so it is a bearer credential. Every invite:
+
+- expires — 15 minutes by default, 24 hours at most;
+- is single use, consumed by the issuing side during the peer handshake against the joining peer's public key;
+- can be revoked while it is still pending.
+
+The local invite registry stores no room code, no room secret, and no invite code — only the identifier, its validity window, and its state.
+
+A room binds to the first peer identity and public key that prove membership. A leaked room code cannot admit a different peer afterwards, even if the relay loses its own membership state; admitting someone else means rotating the room. Set `requireInvite: true` in a participant config to refuse any peer that arrives without an invite.
+
+A short-lived invite is consent to connect, not proof of identity. Compare the peer fingerprint shown in the window against the one its owner reads to you out of band, then confirm it.
 
 ## Optional relay modes
 
@@ -187,7 +224,7 @@ This wake behavior is experimentally observed client behavior, not a stable Clau
 
 For the next temporary conversation, stop the old host with `Ctrl+C`, run `npm run host` again, and have the peer run the newly printed `npm run join` command.
 
-When using an always-on relay, rotate the room without replacing the local identity. The initiator generates the code:
+When using an always-on relay, rotate the room without replacing the local identity. The desktop window does this with **Create room** plus an invite; the CLI equivalent is below. The initiator generates the code:
 
 ```powershell
 npm run new-session -- .agent-link\alice-codex.json
@@ -221,6 +258,11 @@ Use AgentLink as the responder. Wait for the proposed goal through peer_goal, ac
 - Replay IDs survive local MCP process restarts.
 - The singleton broker spool and response-deduplication cache are encrypted at rest with a key derived from the local identity.
 - Local broker IPC requires a room-secret proof before a frontend may read or claim inbox entries.
+- Invite codes expire, are single use, and are redeemed against the joining peer's public key before anything is pinned; the redemption is recorded durably first, so a crash cannot leave an invite consumed only in memory.
+- A room binds to the first peer identity that proves membership; rotating the room is the only way to admit a different key.
+- Trust state is scoped per room, and every shared local state file is written atomically and merged under a cross-process lock, so two processes on one config cannot clobber pinned keys or bindings.
+- A frontend negotiates the broker's protocol version, client range, and method list before using it, and replaces an incompatible broker only through authenticated takeover, never by signalling a pid.
+- The broker activity ring holds metadata only: timestamps, kinds, request IDs, peer aliases, states, and reasons. Request text can never enter it.
 - Relay rooms, pending messages, and logs have quotas, TTLs, and rotation.
 - Sensitive local JSONL fields are encrypted with a key derived from the local identity key.
 - `ROOM_CODE`, `active.json`, identity keys, state, trust files, logs, and reports live under `.agent-link/`, which is ignored by Git.
@@ -233,11 +275,14 @@ The relay can observe connection metadata and message sizes. AgentLink does not 
 
 ```powershell
 npm run doctor
+npm run desktop
 npm run notifications -- --local true
 npm run report:all
 npm run smoke
 ./scripts/stop-relay.ps1
 ```
+
+`npm run stop-broker` exists for the one legacy transition from a broker that predates protocol negotiation. It verifies the target over the local endpoint, prints its pid and command line, and requires an explicit confirmation. Normal replacement is automatic and uses authenticated takeover instead.
 
 Readable reports are generated only on explicit request under `.agent-link/reports/`. The source JSONL logs keep sensitive message fields encrypted.
 

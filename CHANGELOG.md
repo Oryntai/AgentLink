@@ -2,7 +2,7 @@
 
 All notable changes to AgentLink are documented here.
 
-## Unreleased
+## 0.5.0 - 2026-08-14
 
 - Added a desktop application: an Electron window that reads link status, the peer's identity with its key fingerprint and verification state, pending requests, and the metadata-only activity ring straight from the local broker in the main process. The renderer is sandboxed behind a context bridge whose only capability is asking for a snapshot, so the window never touches the broker socket and shows no message text. `npm run desktop:web` keeps the older headless page for a machine without a display.
 - Added broker protocol negotiation: frontends check the running broker's protocol version, its advertised client range, and its method list before using it, so a restarted MCP process can no longer talk to an older broker that lacks its RPCs.
@@ -28,6 +28,7 @@ All notable changes to AgentLink are documented here.
 - Fixed silent message loss on join: the bridge attached its message listener only after its handshake settled, so anything the relay flushed from the offline queue right after the welcome could be dropped. A peer that had never been in the room lost the first message sent to it.
 - Fixed the MCP session dying silently when the local broker was momentarily unavailable: the fire-and-forget broker start no longer turns a transient failure into an unhandled rejection, and a broker that exits mid-handshake is simply started again.
 - Kept the activity ring off the message hot path: it is marked dirty and flushed with the next real save or by broker maintenance, instead of re-encrypting the whole store on every message.
+- Fixed a broker start race: the endpoint accepted clients before the store was loaded and persisted, so an early frontend could reach a broker with no context and observe a store that had not been migrated on disk yet. The address is still claimed first, but connections are served only once initialisation finished.
 
 ## 0.4.0 - 2026-08-06
 
