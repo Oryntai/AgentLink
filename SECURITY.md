@@ -31,7 +31,9 @@ An invite code contains the relay URL and the room code, so anyone holding it ca
 
 An invite proves that its holder was invited, not who they are. Compare the peer key fingerprint out of band before treating the link as identified; the desktop window shows that fingerprint and records an explicit owner confirmation.
 
-The desktop window reads the local broker over the same authenticated IPC as any other frontend. Its renderer runs with context isolation and no Node integration, cannot navigate, and receives only status, invite metadata, request metadata, and the metadata-only activity ring. It never receives message text.
+The desktop window reads the local broker over the same authenticated IPC as any other frontend. Its renderer runs with context isolation and no Node integration, cannot navigate, and receives status, invite metadata, request metadata, and the metadata-only activity ring. The only message text it receives is text this owner is entitled to read anyway: the questions typed in this window with the answers they got, and requests the owner is being asked to approve.
+
+A guest joined through an invite is a peer like any other: it sends text, and the receiving agent decides what to do with it under its own prompt, approval policy, and credentials. AgentLink gives a guest no shell, no file access, and no way to run anything directly. What a guest can obtain is bounded by what the answering agent is willing to do, so an owner who hands out an invite should assume the guest can ask for anything that agent can reach. The manual approval policy narrows that: each request waits until the owner reads it and approves, and until then it reaches no local agent at all. The default policy is automatic, which preserves the behaviour of earlier versions — turn it on before inviting someone whose questions you want to see first.
 
 Local desktop notifications may reveal the configured peer alias on the OS lock screen, depending on operating-system settings. Optional phone webhooks receive only notification timing and a pending count, but that metadata can still reveal activity patterns. The webhook URL is a secret and must use HTTPS.
 

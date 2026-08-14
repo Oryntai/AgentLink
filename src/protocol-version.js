@@ -1,5 +1,5 @@
-export const BROKER_PROTOCOL_VERSION = 2;
-export const DESKTOP_API_VERSION = 1;
+export const BROKER_PROTOCOL_VERSION = 3;
+export const DESKTOP_API_VERSION = 2;
 
 export const MIN_BROKER_PROTOCOL_VERSION = 2;
 
@@ -34,6 +34,11 @@ export const DESKTOP_BROKER_METHODS = Object.freeze([
   "invite_list",
   "invite_revoke",
   "peer_verify",
+  "policy_get",
+  "policy_set",
+  "approval_list",
+  "approval_decide",
+  "conversation_list",
 ]);
 
 export const BROKER_METHODS = DESKTOP_BROKER_METHODS;

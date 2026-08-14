@@ -1,4 +1,15 @@
-export const STORE_VERSION = 2;
+export const STORE_VERSION = 3;
+
+// How a request that arrives from the peer reaches this owner's agent.
+// "auto" is what every earlier version did: the request is queued for whichever
+// task is listening. "manual" holds it until the owner approves it in the
+// desktop window, which is what makes it safe to hand an invite to a guest.
+export const APPROVAL_MODES = Object.freeze(["auto", "manual"]);
+export const DEFAULT_APPROVAL_MODE = "auto";
+
+export function approvalMode(raw) {
+  return APPROVAL_MODES.includes(raw) ? raw : DEFAULT_APPROVAL_MODE;
+}
 
 const maxKindLength = 40;
 const maxIdLength = 128;
@@ -63,6 +74,9 @@ export function migrateStore(raw, { maxActivity = DEFAULT_ACTIVITY_LIMIT } = {})
     activity: (Array.isArray(source.activity) ? source.activity : [])
       .map((entry) => activityRecord(entry))
       .filter(Boolean),
+    // Rebuilt rather than carried over, so an unknown mode written by another
+    // build can never disable the approval gate by accident.
+    policy: { approvals: approvalMode(source.policy?.approvals) },
   };
   if (data.activity.length > maxActivity) {
     data.activity.splice(0, data.activity.length - maxActivity);

@@ -27,6 +27,8 @@ AgentLink connects exactly two local coding-agent sessions through an encrypted 
 - Exactly one authenticated local broker per participant config owns the remote WebSocket; GUI MCP processes are replaceable local frontends.
 - A frontend must negotiate protocol version, client range, and method list before using a broker, and may replace an incompatible one only through authenticated takeover. Stopping a broker by pid is an operator command, never automatic.
 - The activity ring stores metadata only. Request text, room codes, and payloads must never reach it, and it must stay bounded.
+- Under the manual approval policy a peer request must reach no local agent before the owner approves it: not through the inbox, not through a claim, not through a waiter, and not through a broadcast. Only the owner's window may read its text while it is held.
+- A guest is a peer that asks, never one that acts. Nothing in AgentLink may give the peer a direct path to files, shells, or tools; the answering agent decides what to do under its own prompt and approvals.
 - An invite code carries the room secret, so it is a bearer credential: it must always expire, be single use, and be revocable while pending. The invite registry stores no room code, no room secret, and no invite code.
 - An invite is consumed by the issuing side during the peer handshake, against the peer public key, and the consumption must be durably recorded before the peer is pinned. If it cannot be recorded, refuse the peer.
 - Local state files shared by more than one process are updated under a cross-process lock and merged monotonically. Pinned keys, bindings, and replay ids must never be lost to a concurrent writer.
@@ -42,6 +44,7 @@ AgentLink connects exactly two local coding-agent sessions through an encrypted 
 - `src/invite-code.js` and `src/invite-registry.js`: expiring single-use invite codes and the owner-side registry that redeems them against a peer public key.
 - `src/atomic-file.js` and `src/trust-store.js`: the shared write-then-replace helper and cross-process lock every local state file uses, plus the monotonic trust merge.
 - `scripts/stop-broker.js`: operator-only command that verifies and stops a running broker after explicit confirmation.
+- `scripts/guest.js` and `desktop/`: joining a room as a person rather than an agent, asking the peer's agent from the window, and the owner's approval gate over incoming requests.
 - `src/notifier.js` and `scripts/watch.js`: local owner notifications, count-only optional phone webhooks, and the experimental metadata-only Claude watcher.
 - `src/bridge-client.js`: WebSocket lifecycle, encrypted delivery, signatures, replay protection, and peer pinning.
 - `src/relay-server.js`: ciphertext routing, offline queue, quotas, TTLs, and persistence.

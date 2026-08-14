@@ -21,6 +21,7 @@ Two developers often have access to different repositories, databases, or enviro
 - Requests received without a listener remain in an encrypted local inbox and trigger an owner notification.
 - A permanent MCP installation hot-reloads `.agent-link/active.json`; new rooms do not require a GUI restart.
 - A desktop window reads the link, the peer identity, pending requests, and metadata-only activity from the local broker, and creates or joins rooms without a terminal.
+- A person can ask the peer's agent from that window without running an agent of their own, and the owner decides whether each request waits for approval.
 - Invites are single-use expiring codes, and a room binds to the first peer key that proves membership.
 - Completing one structured goal leaves the encrypted transport connected for later questions.
 - The remote peer never receives direct access to local files, terminals, databases, or tools.
@@ -113,11 +114,13 @@ From the window an owner can:
 - join a room by pasting an invite code;
 - issue a single-use invite together with a paste-ready briefing for the peer owner's agent;
 - revoke an invite that is still pending;
-- confirm the peer's key fingerprint after checking it out of band.
+- confirm the peer's key fingerprint after checking it out of band;
+- ask the peer's agent a question and read the answer;
+- hold incoming requests for approval, then approve or deny each one.
 
 Creating or joining a room rewrites the participant configs and the running broker reloads them, so no GUI or task restart is required. Room creation reuses the relay already configured for that config; start `npm run host` or point the config at a permanent relay first.
 
-On a machine without Electron or without a display, `npm run desktop:web` serves the same view on `http://127.0.0.1:4737` and opens it as a chromeless window in an installed Chromium browser. That page is read-only and has no room, invite, or verification actions.
+On a machine without Electron or without a display, `npm run desktop:web` serves the same view on `http://127.0.0.1:4737` and opens it as a chromeless window in an installed Chromium browser. That page is read-only: it has no room, invite, verification, ask, or approval actions.
 
 ## Invites and peer binding
 
@@ -132,6 +135,32 @@ The local invite registry stores no room code, no room secret, and no invite cod
 A room binds to the first peer identity and public key that prove membership. A leaked room code cannot admit a different peer afterwards, even if the relay loses its own membership state; admitting someone else means rotating the room. Set `requireInvite: true` in a participant config to refuse any peer that arrives without an invite.
 
 A short-lived invite is consent to connect, not proof of identity. Compare the peer fingerprint shown in the window against the one its owner reads to you out of band, then confirm it.
+
+## Ask someone else's agent
+
+Someone is too busy to help, and what you need is one look at their machine: a row in their database, a log line, the state of their branch. They send you an invite and you ask their agent yourself.
+
+The guest side needs AgentLink and nothing else — no Codex, no Claude, no MCP installation:
+
+```powershell
+npm run guest -- --invite "al1...." --name "Alice"
+npm run desktop
+```
+
+Type the question under **Ask the peer's agent**; the answer appears below it once their agent replies. The window keeps the questions asked from it together with their answers, and nothing else in it shows message text.
+
+### What the owner controls
+
+The **Incoming requests** section decides what the peer may reach:
+
+| Mode | What happens |
+| --- | --- |
+| Your agent answers on its own | Requests are queued for whichever task is listening, exactly as between two agents. This is the default and matches every earlier version. |
+| Approve each request myself | Each request waits in the window. The agent does not see it, cannot claim it, and is not woken by it until the owner presses **Approve**. |
+
+Under manual approval the owner reads the request before deciding. **Deny** ends the request and tells the guest it was declined, without sending a reason. Switching back to automatic releases whatever is already waiting.
+
+A guest asks; it does not command. The request arrives as text for the agent to judge, like any other peer message — it is not a shell on the owner's machine, and an agent held to a read-only prompt stays read-only. Whether anything changes on that machine depends on what its own agent is willing to do, which is exactly what manual approval is for.
 
 ## Optional relay modes
 
@@ -263,6 +292,7 @@ Use AgentLink as the responder. Wait for the proposed goal through peer_goal, ac
 - Trust state is scoped per room, and every shared local state file is written atomically and merged under a cross-process lock, so two processes on one config cannot clobber pinned keys or bindings.
 - A frontend negotiates the broker's protocol version, client range, and method list before using it, and replaces an incompatible broker only through authenticated takeover, never by signalling a pid.
 - The broker activity ring holds metadata only: timestamps, kinds, request IDs, peer aliases, states, and reasons. Request text can never enter it.
+- Under the manual approval policy a peer request is held by the broker: it is absent from the inbox an agent reads, cannot be claimed, and wakes no listener until the owner approves it.
 - Relay rooms, pending messages, and logs have quotas, TTLs, and rotation.
 - Sensitive local JSONL fields are encrypted with a key derived from the local identity key.
 - `ROOM_CODE`, `active.json`, identity keys, state, trust files, logs, and reports live under `.agent-link/`, which is ignored by Git.

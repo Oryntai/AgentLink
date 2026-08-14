@@ -22,7 +22,13 @@ import {
   MAX_CLIENT_PROTOCOL_VERSION,
   MIN_CLIENT_PROTOCOL_VERSION,
 } from "./protocol-version.js";
-import { activityLimit, migrateStore, recordActivity } from "./store-migration.js";
+import {
+  APPROVAL_MODES,
+  activityLimit,
+  approvalMode,
+  migrateStore,
+  recordActivity,
+} from "./store-migration.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const configPath = path.resolve(
@@ -146,6 +152,10 @@ function safeWrite(socket, value) {
 }
 
 const terminalRequestStates = new Set(["responded", "declined", "expired"]);
+// A question typed by a person is kept locally so the window can show them what
+// they asked. Requests made by an agent still store only their short head.
+const maxRetainedQuestion = 4_000;
+const maxConversationEntries = 50;
 
 function validLocalProof(secret, frontendId, proof) {
   if (!frontendId || !proof) return false;
@@ -476,10 +486,14 @@ class LocalBroker {
       }
     }
 
+    // Under the manual policy a peer request reaches no local agent until the
+    // owner approves it: it is not dispatched, not listed in the inbox, and its
+    // text is not broadcast to the MCP frontends.
+    const held = message.kind === "request" && this.#approvals() === "manual";
     const entry = {
       message,
       requestId: message.kind === "request" ? requestKey(message) : null,
-      state: "queued",
+      state: held ? "held" : "queued",
       attempts: 0,
       receivedAt: new Date().toISOString(),
     };
@@ -488,17 +502,21 @@ class LocalBroker {
       messageKind: message.kind,
       requestId: entry.requestId,
       peer: message.metadata?.displayName || message.from,
-      state: "received",
+      state: held ? "held" : "received",
     }, maxActivityEntries);
     store.data.messages.push(entry);
     await store.save();
     await this.#ack(context, message.id);
-    this.#broadcast("message", message);
+    if (held) {
+      this.#broadcast("approval", { requestId: entry.requestId, receivedAt: entry.receivedAt });
+    } else {
+      this.#broadcast("message", message);
+    }
 
     if (message.kind === "request") {
-      await this.#sendReceipt(context, entry.requestId, "queued");
+      await this.#sendReceipt(context, entry.requestId, held ? "held" : "queued");
       const pendingCount = store.data.messages.filter(
-        (item) => item.message.kind === "request" && item.state === "queued",
+        (item) => item.message.kind === "request" && ["queued", "held"].includes(item.state),
       ).length;
       void notifyIncomingRequest({
         peerAlias: message.metadata?.displayName || message.from,
@@ -661,6 +679,9 @@ class LocalBroker {
         requestId: id,
         questionHash,
         questionHead: question.replace(/\s+/g, " ").slice(0, 80),
+        // A person has no transcript of their own, so a question typed in the
+        // window is kept locally. An agent asks without retaining anything.
+        question: params.retainQuestion ? question.slice(0, maxRetainedQuestion) : null,
         ownerTaskId: client.frontend.taskId,
         ownerFrontendId: client.frontend.frontendId,
         state: "queued_local",
@@ -856,7 +877,7 @@ class LocalBroker {
     if (method === "respond") return this.#respond(client, params);
     if (method === "inbox_list") {
       return context.store.data.messages
-        .filter((entry) => entry.message.kind === "request")
+        .filter((entry) => entry.message.kind === "request" && entry.state !== "held")
         .map((entry) => ({
           requestId: entry.requestId,
           state: entry.state,
@@ -912,6 +933,78 @@ class LocalBroker {
     if (method === "invite_list") return { invites: await context.bridge.listInvites() };
     if (method === "invite_revoke") return context.bridge.revokeInvite(params.inviteId);
     if (method === "peer_verify") return context.bridge.markPeerVerified(params.fingerprint);
+    // Owner control over what the peer may reach. Only the window needs these,
+    // so they are desktop-only broker methods.
+    if (method === "policy_get") {
+      return { approvals: this.#approvals(), waiting: this.#heldRequests().length };
+    }
+    if (method === "policy_set") {
+      if (!APPROVAL_MODES.includes(params.approvals)) {
+        throw new Error(`approvals must be one of: ${APPROVAL_MODES.join(", ")}`);
+      }
+      context.store.data.policy = { approvals: params.approvals };
+      // Switching to automatic is an explicit decision to stop gating, so what
+      // is already waiting is released instead of being stranded.
+      const released = params.approvals === "auto" ? this.#heldRequests() : [];
+      for (const entry of released) entry.state = "queued";
+      await context.store.save();
+      for (const entry of released) await this.#sendReceipt(context, entry.requestId, "queued");
+      if (released.length) await this.#dispatch();
+      return { approvals: params.approvals, released: released.length };
+    }
+    if (method === "approval_list") {
+      return {
+        waiting: this.#heldRequests().map((entry) => ({
+          requestId: entry.requestId,
+          receivedAt: entry.receivedAt,
+          deadline: entry.message.metadata?.deadline || null,
+          from: entry.message.metadata?.displayName || entry.message.from,
+          question: entry.message.text,
+        })),
+      };
+    }
+    if (method === "approval_decide") {
+      const entry = this.#heldRequests().find((item) => item.requestId === params.requestId);
+      if (!entry) throw new Error("No request is waiting for approval under that id");
+      if (params.decision === "approve") {
+        entry.state = "queued";
+        entry.approvedAt = new Date().toISOString();
+        await context.store.save();
+        await this.#sendReceipt(context, entry.requestId, "queued");
+        await this.#dispatch();
+        return { requestId: entry.requestId, state: entry.state };
+      }
+      if (params.decision === "deny") {
+        const index = context.store.data.messages.indexOf(entry);
+        if (index >= 0) context.store.data.messages.splice(index, 1);
+        await context.store.save();
+        await this.#sendReceipt(
+          context,
+          entry.requestId,
+          "declined",
+          String(params.reason || "the owner declined this request").slice(0, 120),
+        );
+        return { requestId: entry.requestId, state: "declined" };
+      }
+      throw new Error("decision must be approve or deny");
+    }
+    if (method === "conversation_list") {
+      return {
+        conversations: Object.values(context.store.data.outbound)
+          .filter((outbound) => outbound.question)
+          .sort((a, b) => Date.parse(a.createdAt || 0) - Date.parse(b.createdAt || 0))
+          .slice(-maxConversationEntries)
+          .map((outbound) => ({
+            requestId: outbound.requestId,
+            state: outbound.state,
+            question: outbound.question,
+            answer: outbound.response?.text || null,
+            reason: outbound.reason || null,
+            createdAt: outbound.createdAt || null,
+            updatedAt: outbound.updatedAt || null,
+          })),
+      };
+    }
     if (method === "activity_tail") {
       const activity = context.store.data.activity || [];
       const limit = Math.min(Math.max(Math.floor(Number(params.limit) || 100), 1), maxActivityEntries);
@@ -953,6 +1046,16 @@ class LocalBroker {
       draining: this.draining,
       endpoint,
     };
+  }
+
+  #approvals() {
+    return approvalMode(this.context?.store.data.policy?.approvals);
+  }
+
+  #heldRequests() {
+    return this.context.store.data.messages.filter(
+      (entry) => entry.message.kind === "request" && entry.state === "held",
+    );
   }
 
   async noteLifecycle(state, reason = null) {

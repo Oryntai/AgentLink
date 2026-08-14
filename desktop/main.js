@@ -29,10 +29,14 @@ async function ensureBroker() {
 async function readState() {
   try {
     const client = await ensureBroker();
-    const [status, activity, inbox] = await Promise.all([
+    const [status, activity, inbox, invites, policy, waiting, conversations] = await Promise.all([
       client.remoteStatus(),
       client.activityTail(60),
       client.listInbox(),
+      client.listInvites().then((result) => result.invites).catch(() => []),
+      client.getPolicy(),
+      client.listApprovals().then((result) => result.waiting),
+      client.listConversations().then((result) => result.conversations),
     ]);
     brokerError = null;
     return {
@@ -40,7 +44,12 @@ async function readState() {
       configPath,
       status,
       activity: activity.activity || [],
-      invites: await client.listInvites().then((r) => r.invites).catch(() => []),
+      invites,
+      policy,
+      // Text the owner is being asked to approve, and the answers to questions
+      // this owner asked. Everything else in this window stays metadata only.
+      waiting,
+      conversations,
       inbox: inbox.map((entry) => ({
         requestId: entry.requestId,
         state: entry.state,
@@ -96,6 +105,9 @@ const actions = {
   createInvite: (client, payload) => client.createInvite({ label: payload.label }),
   revokeInvite: (client, payload) => client.revokeInvite(payload.inviteId),
   verifyPeer: (client, payload) => client.verifyPeer(payload.fingerprint),
+  ask: (client, payload) => client.requestSend(payload.question, { retainQuestion: true }),
+  decide: (client, payload) => client.decideApproval(payload.requestId, payload.decision),
+  setPolicy: (client, payload) => client.setPolicy(payload.approvals),
 };
 
 ipcMain.handle("agentlink:action", async (event, name, payload = {}) => {

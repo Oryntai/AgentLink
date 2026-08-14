@@ -2,6 +2,13 @@
 
 All notable changes to AgentLink are documented here.
 
+## Unreleased
+
+- Added guest access: a person can join someone else's room with `npm run guest -- --invite "al1...."` and ask that owner's agent a question straight from the desktop window. The guest side needs no agent at all — no Codex, no Claude, no MCP installation — and the window shows the questions asked from it together with the answers that come back.
+- Added an approval policy for requests arriving from the peer. Under `manual` a request is held by the broker: it is absent from the inbox an agent reads, cannot be claimed, wakes no listener, and its text is not broadcast to frontends until the owner approves it in the window. Denying ends the request and tells the peer, without sending a reason the owner typed. `auto` keeps the previous behaviour and stays the default; switching back to it releases whatever was waiting.
+- Added desktop-only broker methods `policy_get`, `policy_set`, `approval_list`, `approval_decide`, and `conversation_list`. The broker protocol is now 3, and the store migrates to version 3 with the policy it carries, rebuilt from a known list so an unrecognised value cannot disable the gate.
+- Kept a question typed in the window locally so the person can see what they asked. A request made by an agent still stores only its short head.
+
 ## 0.5.0 - 2026-08-14
 
 - Added a desktop application: an Electron window that reads link status, the peer's identity with its key fingerprint and verification state, pending requests, and the metadata-only activity ring straight from the local broker in the main process. The renderer is sandboxed behind a context bridge whose only capability is asking for a snapshot, so the window never touches the broker socket and shows no message text. `npm run desktop:web` keeps the older headless page for a machine without a display.

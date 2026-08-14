@@ -441,6 +441,26 @@ export class BrokerClient extends EventEmitter {
     return this.call("peer_verify", { fingerprint });
   }
 
+  getPolicy() {
+    return this.call("policy_get");
+  }
+
+  setPolicy(approvals) {
+    return this.call("policy_set", { approvals });
+  }
+
+  listApprovals() {
+    return this.call("approval_list");
+  }
+
+  decideApproval(requestId, decision, reason = null) {
+    return this.call("approval_decide", { requestId, decision, reason });
+  }
+
+  listConversations() {
+    return this.call("conversation_list");
+  }
+
   claimInbox(requestId) {
     return this.call("inbox_claim", { requestId });
   }

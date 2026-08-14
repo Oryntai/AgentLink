@@ -94,15 +94,26 @@ Each owner runs one local broker for a participant config. GUI tasks connect as 
 
 ### Broker protocol negotiation
 
-Broker protocol version 2 is the minimum. A frontend opens with `hello` and compares the broker's protocol version, its advertised client range, and its method list against what that frontend needs before using it. Required methods are a frontend capability, not one global list: a generic MCP session needs the core methods, while a desktop frontend also needs `activity_tail`, `room_create`, `room_join`, `invite_create`, `invite_list`, `invite_revoke`, and `peer_verify`.
+Broker protocol version 2 is the minimum. A frontend opens with `hello` and compares the broker's protocol version, its advertised client range, and its method list against what that frontend needs before using it. Required methods are a frontend capability, not one global list: a generic MCP session needs the core methods, while a desktop frontend also needs `activity_tail`, `room_create`, `room_join`, `invite_create`, `invite_list`, `invite_revoke`, `peer_verify`, `policy_get`, `policy_set`, `approval_list`, `approval_decide`, and `conversation_list`.
 
 Only an explicit rejection means the broker is too old. Silence is retried and then reported as a transport failure.
 
 An incompatible broker is replaced by authenticated graceful takeover: it requeues its in-flight leases, refuses new work while draining, and exits so the newer frontend can start a replacement. A handover is not a failed delivery attempt and never consumes the claim-attempt budget. Stopping a broker by pid is an operator command (`npm run stop-broker`), never an automatic path.
 
+### Approval policy
+
+Each owner's store carries one policy for requests arriving from the peer:
+
+- `auto`: the request is queued and dispatched to whichever frontend is waiting. This is the default and how every version before this one behaved.
+- `manual`: the request is stored in the `held` state. It is not dispatched, not returned by `inbox_list`, not claimable through `inbox_claim`, and its text is not broadcast to frontends. The owner sees it through the desktop-only `approval_list` and resolves it with `approval_decide`.
+
+Approving moves the request to `queued` and dispatches it normally. Denying removes it and sends a `declined` receipt whose reason is generated locally, so nothing the owner types travels to the peer. A held request still expires on its own deadline. Switching the policy back to `auto` releases every held request, because leaving them gated by a policy that no longer exists would strand them.
+
+The asking side learns about the gate: it receives a `held` receipt and reports that state until the request is approved, denied, or expires.
+
 ### Store and activity ring
 
-The encrypted broker store migrates explicitly from version 1 to version 2, which adds a bounded activity ring. Ring entries carry timestamps, kinds, request IDs, peer aliases, states, and reasons only; request text can never enter it. It is read through `activity_tail` and flushed with the next real save or by broker maintenance rather than on the message hot path.
+The encrypted broker store migrates explicitly from version 1 to version 2, which adds a bounded activity ring, and from version 2 to version 3, which adds the approval policy. The policy is rebuilt from a known list on load, so an unrecognised value falls back to the default instead of disabling the gate. Ring entries carry timestamps, kinds, request IDs, peer aliases, states, and reasons only; request text can never enter it. It is read through `activity_tail` and flushed with the next real save or by broker maintenance rather than on the message hot path.
 
 Both in-flight states return to the queue when the store loads, so a broker killed mid-processing cannot strand a request under a dead owner. Trust state is scoped per room in `<config>.<roomId>.trust.json`, imported once from the older shared file when it describes the same room, and merged monotonically under a cross-process lock that reclaims only a dead owner's lock.
 

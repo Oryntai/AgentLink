@@ -4,6 +4,17 @@ const escape = (value) => String(value ?? "—").replace(
 );
 const time = (value) => (value ? new Date(value).toLocaleTimeString() : "—");
 
+// What an outbound question is doing right now, said the way a person would.
+const outboundLabels = {
+  queued_local: "Not delivered yet.",
+  relay_acked: "Delivered to the relay.",
+  queued: "Waiting for their agent to pick it up.",
+  held: "Waiting for the other owner to approve it.",
+  claimed: "Their agent picked it up.",
+  processing: "Their agent is working on it.",
+  expired: "Expired before an answer arrived.",
+};
+
 function rows(target, pairs) {
   document.getElementById(target).innerHTML = pairs
     .map(([key, value]) => `<div class="row"><span class="k">${key}</span><span class="v">${value}</span></div>`)
@@ -63,6 +74,65 @@ async function refresh() {
     ? "Fingerprint confirmed"
     : "Confirm this fingerprint";
 
+  // Questions this owner asked from this window, newest first.
+  const conversations = (state.conversations || []).slice().reverse();
+  document.getElementById("conversations").innerHTML = conversations.length
+    ? conversations.map((record) => {
+      const answered = record.state === "responded";
+      const pending = answered ? "" : " pending";
+      const body = answered
+        ? record.answer
+        : record.reason || outboundLabels[record.state] || record.state;
+      return '<div class="talk">'
+        + `<div class="meta">${escape(answered ? "answered" : record.state.replace(/_/g, " "))}`
+        + ` · ${time(record.updatedAt || record.createdAt)}</div>`
+        + `<div class="said">${escape(record.question)}</div>`
+        + `<div class="answer${pending}">${escape(body)}</div>`
+        + "</div>";
+    }).join("")
+    : '<div class="empty">No questions asked from this window yet.</div>';
+
+  // What the peer wants this owner's agent to do, and whether it needs a decision.
+  const policy = state.policy || { approvals: "auto", waiting: 0 };
+  const manual = policy.approvals === "manual";
+  rows("policy-rows", [
+    ["mode", manual ? "each request waits for your approval" : "your agent answers on its own"],
+    ["waiting for you", escape(policy.waiting ?? 0)],
+  ]);
+  const toggle = document.getElementById("toggle-policy");
+  toggle.textContent = manual ? "Let my agent answer without me" : "Approve each request myself";
+  toggle.dataset.next = manual ? "auto" : "manual";
+
+  const waiting = state.waiting || [];
+  document.getElementById("approvals").innerHTML = waiting.length
+    ? waiting.map((record) => '<div class="talk">'
+      + `<div class="meta">${escape(record.from)} · ${time(record.receivedAt)}</div>`
+      + `<div class="said">${escape(record.question)}</div>`
+      + '<div class="decide">'
+      + `<button data-approve="${escape(record.requestId)}">Approve</button>`
+      + `<button data-deny="${escape(record.requestId)}">Deny</button>`
+      + "</div></div>").join("")
+    : `<div class="empty">${manual
+      ? "Nothing is waiting for your decision."
+      : "Requests are not held; your agent handles them directly."}</div>`;
+
+  for (const button of document.querySelectorAll("[data-approve]")) {
+    button.addEventListener("click", (event) => {
+      void run(event.target, "decide", {
+        requestId: event.target.dataset.approve,
+        decision: "approve",
+      }, () => say("Approved. Your agent can claim it now.", "ok", "policy-msg"), "policy-msg");
+    });
+  }
+  for (const button of document.querySelectorAll("[data-deny]")) {
+    button.addEventListener("click", (event) => {
+      void run(event.target, "decide", {
+        requestId: event.target.dataset.deny,
+        decision: "deny",
+      }, () => say("Denied. They were told, without a reason.", "ok", "policy-msg"), "policy-msg");
+    });
+  }
+
   table("invites", ["state", "label", "expires", ""], state.invites || [], (record) =>
     `<tr><td>${escape(record.state)}</td><td>${escape(record.label)}</td>`
     + `<td>${time(record.expiresAt)}</td><td>${record.state === "pending"
@@ -84,19 +154,19 @@ async function refresh() {
     + `<td>${escape(record.messageKind)}</td><td>${escape(record.state)}</td></tr>`);
 }
 
-function say(text, kind = "") {
-  const node = document.getElementById("room-msg");
+function say(text, kind = "", target = "room-msg") {
+  const node = document.getElementById(target);
   node.className = `msg ${kind}`;
   node.textContent = text;
 }
 
-async function run(button, name, payload, onDone) {
+async function run(button, name, payload, onDone, target = "room-msg") {
   button.disabled = true;
-  say("Working…");
+  say("Working…", "", target);
   const answer = await window.agentlink.act(name, payload);
   button.disabled = false;
   if (!answer.ok) {
-    say(answer.error, "bad");
+    say(answer.error, "bad", target);
     return;
   }
   onDone(answer.result);
@@ -122,6 +192,27 @@ document.getElementById("join-room").addEventListener("click", (event) => {
     const who = result.agents.map((a) => `${a.agentId} (${a.role})`).join(", ");
     say(`Joined "${result.roomName || "room"}". Switched: ${who}.`, "ok");
   });
+});
+
+document.getElementById("send-question").addEventListener("click", (event) => {
+  const field = document.getElementById("question");
+  const question = field.value.trim();
+  if (!question) return say("Type a question first.", "bad", "ask-msg");
+  void run(event.target, "ask", { question }, () => {
+    field.value = "";
+    say("Sent. The answer shows up here when their agent replies.", "ok", "ask-msg");
+  }, "ask-msg");
+});
+
+document.getElementById("toggle-policy").addEventListener("click", (event) => {
+  const next = event.target.dataset.next === "manual" ? "manual" : "auto";
+  void run(event.target, "setPolicy", { approvals: next }, (result) => {
+    say(next === "manual"
+      ? "Every incoming request now waits for you."
+      : "Requests go straight to your agent."
+        + (result.released ? ` Released ${result.released} that were waiting.` : ""),
+      "ok", "policy-msg");
+  }, "policy-msg");
 });
 
 document.getElementById("create-invite").addEventListener("click", (event) => {
