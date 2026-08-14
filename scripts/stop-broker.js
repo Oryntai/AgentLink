@@ -82,9 +82,23 @@ function processCandidates(configPath) {
 function alive(pid) {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+  if (process.platform === "win32") return true;
+  // On Unix a process that has exited but has not been reaped by its parent
+  // still answers signal 0. A zombie broker is stopped, so waiting for it to
+  // disappear would report a false "still running" to the operator.
+  try {
+    const state = execFileSync("ps", ["-o", "state=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return state !== "" && !state.startsWith("Z");
+  } catch (error) {
+    // `ps` exits non-zero once the pid is gone; a missing `ps` tells us nothing,
+    // so fall back to what signal 0 already reported.
+    return error.code === "ENOENT";
   }
 }
 

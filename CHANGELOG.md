@@ -28,6 +28,7 @@ All notable changes to AgentLink are documented here.
 - Fixed silent message loss on join: the bridge attached its message listener only after its handshake settled, so anything the relay flushed from the offline queue right after the welcome could be dropped. A peer that had never been in the room lost the first message sent to it.
 - Fixed the MCP session dying silently when the local broker was momentarily unavailable: the fire-and-forget broker start no longer turns a transient failure into an unhandled rejection, and a broker that exits mid-handshake is simply started again.
 - Kept the activity ring off the message hot path: it is marked dirty and flushed with the next real save or by broker maintenance, instead of re-encrypting the whole store on every message.
+- Fixed `stop-broker` reporting a stopped broker as still running on Unix: a broker whose parent had not reaped it yet still answers signal 0, so the command now treats a zombie as gone instead of waiting out its timeout.
 - Fixed a broker start race: the endpoint accepted clients before the store was loaded and persisted, so an early frontend could reach a broker with no context and observe a store that had not been migrated on disk yet. The address is still claimed first, but connections are served only once initialisation finished.
 
 ## 0.4.0 - 2026-08-06
