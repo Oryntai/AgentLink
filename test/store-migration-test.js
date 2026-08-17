@@ -13,6 +13,8 @@ import {
   activityRecord,
   migrateStore,
   recordActivity,
+  recordTranscript,
+  transcriptRecord,
 } from "../src/store-migration.js";
 
 const activityKeys = ["ts", "kind", "messageKind", "requestId", "peer", "state", "reason"];
@@ -23,6 +25,16 @@ const legacyStore = {
   messages: [{ requestId: "old", state: "queued", message: { id: "old", kind: "request" } }],
   outbound: { out: { requestId: "out", state: "queued" } },
   completed: { done: { completedAt: new Date().toISOString() } },
+  transcript: [{
+    id: "message:legacy",
+    messageId: "legacy",
+    direction: "outbound",
+    kind: "chat",
+    author: "Legacy",
+    text: "encrypted transcript body",
+    state: "sent",
+    createdAt: "2026-08-06T10:00:00.000Z",
+  }],
 };
 
 const migrated = migrateStore(structuredClone(legacyStore));
@@ -30,12 +42,15 @@ assert.equal(migrated.version, STORE_VERSION);
 assert.deepEqual(migrated.messages, legacyStore.messages);
 assert.deepEqual(migrated.outbound, legacyStore.outbound);
 assert.deepEqual(migrated.completed, legacyStore.completed);
+assert.equal(migrated.transcript.length, 1);
+assert.equal(migrated.transcript[0].text, "encrypted transcript body");
 assert.deepEqual(migrated.activity, []);
 
 const repaired = migrateStore({ messages: "nonsense", outbound: null, activity: 7 });
 assert.deepEqual(repaired.messages, []);
 assert.deepEqual(repaired.outbound, {});
 assert.deepEqual(repaired.completed, {});
+assert.deepEqual(repaired.transcript, []);
 assert.deepEqual(repaired.activity, []);
 assert.equal(migrateStore(null).version, STORE_VERSION);
 
@@ -91,6 +106,28 @@ assert.equal(ring.activity.at(-1).requestId, "r24");
 assert.equal(recordActivity(ring, { requestId: "no-kind" }, 10), null);
 assert.equal(ring.activity.length, 10);
 
+const transcript = {};
+assert.equal(transcriptRecord({ id: "missing-text", direction: "outbound" }), null);
+recordTranscript(transcript, {
+  id: "request:1",
+  messageId: "envelope-1",
+  requestId: "1",
+  direction: "outbound",
+  kind: "request",
+  author: "Alice",
+  text: "inspect the release branch",
+  state: "sent",
+  createdAt: "2026-08-06T10:00:00.000Z",
+});
+recordTranscript(transcript, {
+  id: "request:1",
+  state: "read",
+  updatedAt: "2026-08-06T10:01:00.000Z",
+});
+assert.equal(transcript.transcript.length, 1, "a receipt updates its existing bubble");
+assert.equal(transcript.transcript[0].text, "inspect the release branch");
+assert.equal(transcript.transcript[0].state, "read");
+
 const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-link-store-test-"));
 const configPath = path.join(tempDir, "active.json");
 const roomCode = createRoomCode();
@@ -131,9 +168,10 @@ try {
   brokerPid = client.status().broker.pid;
   await client.remoteStatus();
 
+  const encryptedStore = await readFile(storePath, "utf8");
   const onDisk = decryptLogValue(
     identity.privateKey,
-    JSON.parse(await readFile(storePath, "utf8")).payload,
+    JSON.parse(encryptedStore).payload,
   );
   assert.equal(onDisk.version, STORE_VERSION, "the broker must persist the migrated version");
   assert(
@@ -145,6 +183,8 @@ try {
     "broker start must be recorded",
   );
   assert.equal(JSON.stringify(onDisk.activity).includes("must not survive"), false);
+  assert.equal(onDisk.transcript[0].text, "encrypted transcript body");
+  assert.equal(encryptedStore.includes("encrypted transcript body"), false);
   for (const entry of onDisk.activity) {
     assert.deepEqual(Object.keys(entry).sort(), [...activityKeys].sort());
   }

@@ -9,7 +9,7 @@ import { writeFileAtomic } from "./atomic-file.js";
 import { BridgeClient } from "./bridge-client.js";
 import { brokerEndpoint } from "./broker-endpoint.js";
 import { loadBridgeConfig } from "./config.js";
-import { createRoomCode } from "./crypto.js";
+import { createRoomCode, messageId as createMessageId } from "./crypto.js";
 import { parseInviteCode } from "./invite-code.js";
 import { peerInstructions } from "./peer-instructions.js";
 import { decryptLogValue, encryptLogValue } from "./log-crypto.js";
@@ -28,6 +28,7 @@ import {
   approvalMode,
   migrateStore,
   recordActivity,
+  recordTranscript,
 } from "./store-migration.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -124,6 +125,13 @@ function requestKey(message) {
   return message.metadata?.requestId || message.id;
 }
 
+function requestDeadlineMs(message) {
+  const raw = message?.metadata?.deadline;
+  if (!raw) return null;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function routeScore(message, frontend = {}) {
   const route = message.metadata?.routingKey || {};
   if (route.explicitTaskId) {
@@ -152,6 +160,21 @@ function safeWrite(socket, value) {
 }
 
 const terminalRequestStates = new Set(["responded", "declined", "expired"]);
+const transcriptStateRanks = new Map([
+  ["queued_local", 0],
+  ["relay_acked", 1],
+  ["sent", 1],
+  ["delivered", 2],
+  ["unread", 2],
+  ["queued", 3],
+  ["held", 3],
+  ["claimed", 4],
+  ["processing", 5],
+  ["responded", 6],
+  ["read", 6],
+  ["declined", 7],
+  ["expired", 7],
+]);
 // A question typed by a person is kept locally so the window can show them what
 // they asked. Requests made by an agent still store only their short head.
 const maxRetainedQuestion = 4_000;
@@ -211,6 +234,11 @@ class LocalBroker {
         this.log.write("incoming_failed", { error: error.message }),
       );
     });
+    bridge.on("delivery", (delivery) => {
+      void this.#onDelivery(context, delivery).catch((error) =>
+        this.log.write("delivery_update_failed", { error: error.message }),
+      );
+    });
     const previous = this.context;
     this.context = context;
     this.fingerprint = fingerprint;
@@ -242,13 +270,75 @@ class LocalBroker {
     context.bridge.discard(messageId);
   }
 
+  #recordTranscript(context, event) {
+    return recordTranscript(context.store.data, event);
+  }
+
+  #updateTranscriptState(context, id, { state, reason, updatedAt } = {}) {
+    const entry = context.store.data.transcript?.find((item) => item.id === id);
+    if (!entry) return null;
+    const currentRank = transcriptStateRanks.get(entry.state) ?? -1;
+    const nextRank = transcriptStateRanks.get(state) ?? -1;
+    if (state && nextRank < currentRank) return entry;
+    return this.#recordTranscript(context, { id, state, reason, updatedAt });
+  }
+
+  #updateTranscriptByMessageId(context, messageId, event) {
+    const entry = context.store.data.transcript?.find((item) => item.messageId === messageId);
+    if (!entry) return null;
+    return this.#updateTranscriptState(context, entry.id, event);
+  }
+
+  async #onDelivery(context, delivery) {
+    if (context !== this.context || !delivery?.messageId) return;
+    const entry = context.store.data.transcript?.find(
+      (item) => item.messageId === delivery.messageId,
+    );
+    // A later receipt (queued, claimed, processing, or read) is stronger
+    // evidence than the relay delivery acknowledgement and must never be
+    // overwritten by a delayed acknowledgement.
+    if (!entry || !["queued_local", "relay_acked", "sent"].includes(entry.state)) return;
+    this.#updateTranscriptState(context, entry.id, {
+      state: "delivered",
+      updatedAt: delivery.receivedAt || new Date().toISOString(),
+    });
+    await context.store.save();
+    this.#broadcast("delivery", delivery);
+  }
+
+  async #sendMessageReceipt(context, message, state = "read") {
+    if (!message?.id) return;
+    try {
+      await context.bridge.send(state, {
+        kind: "receipt",
+        metadata: {
+          displayName: context.config.displayName,
+          messageId: message.id,
+          state,
+          ts: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      await this.log.write("message_receipt_send_failed", {
+        messageId: message.id,
+        state,
+        error: error.message,
+      });
+    }
+  }
+
   async #sendReceipt(context, id, state, reason = null) {
+    this.#updateTranscriptState(context, `request:${id}`, {
+      state,
+      reason,
+      updatedAt: new Date().toISOString(),
+    });
     recordActivity(
       context.store.data,
       { kind: "inbound", messageKind: "request", requestId: id, state, reason },
       maxActivityEntries,
     );
-    context.store.markDirty();
+    await context.store.save();
     try {
       await context.bridge.send(state, {
         kind: "receipt",
@@ -265,6 +355,28 @@ class LocalBroker {
     }
   }
 
+  #isOwnerInstruction(entry) {
+    // `source` is assigned only by the local desktop RPC below. Do not trust
+    // transport metadata here: a remote peer controls its own metadata.
+    return entry?.source === "owner";
+  }
+
+  async #recordOwnerInstructionState(context, entry, state, reason = null) {
+    this.#updateTranscriptByMessageId(context, entry.message.id, {
+      state,
+      reason,
+      updatedAt: new Date().toISOString(),
+    });
+    recordActivity(context.store.data, {
+      kind: "owner",
+      messageKind: "owner_request",
+      requestId: entry.requestId,
+      state,
+      reason,
+    }, maxActivityEntries);
+    await context.store.save();
+  }
+
   #recordOutboundState(outbound, state, { reason = null, ts = null } = {}) {
     const timestamp = ts || new Date().toISOString();
     outbound.state = state;
@@ -275,6 +387,11 @@ class LocalBroker {
     if (!previous || previous.state !== state || previous.reason !== reason) {
       outbound.receipts.push({ state, reason, ts: timestamp });
       if (this.context) {
+        this.#updateTranscriptState(this.context, `request:${outbound.requestId}`, {
+          state,
+          reason,
+          updatedAt: timestamp,
+        });
         recordActivity(this.context.store.data, {
           ts: timestamp,
           kind: "outbound",
@@ -317,6 +434,18 @@ class LocalBroker {
       outbound.acknowledgedAt = new Date().toISOString();
       outbound.updatedAt = outbound.acknowledgedAt;
       await context.store.save();
+    }
+    // Reading a response through an agent tool is the closest equivalent to a
+    // chat "read" receipt. It is optional for older peers, but a newer peer
+    // can reflect it beside the response bubble in its local transcript.
+    if (outbound.response?.id && !outbound.responseReadAt) {
+      outbound.responseReadAt = new Date().toISOString();
+      this.#updateTranscriptByMessageId(context, outbound.response.id, {
+        state: "read",
+        updatedAt: outbound.responseReadAt,
+      });
+      await context.store.save();
+      await this.#sendMessageReceipt(context, outbound.response, "read");
     }
     return {
       ...this.#outboundSummary(outbound),
@@ -410,15 +539,26 @@ class LocalBroker {
     if (context !== this.context) return;
     const store = context.store;
     if (message.kind === "receipt") {
-      const id = message.metadata?.requestId;
-      if (id && store.data.outbound[id]) {
+      const requestId = message.metadata?.requestId;
+      const messageId = message.metadata?.messageId;
+      let changed = false;
+      if (requestId && store.data.outbound[requestId]) {
         this.#recordOutboundState(
-          store.data.outbound[id],
+          store.data.outbound[requestId],
           message.metadata?.state || message.text,
           { reason: message.metadata?.reason || null, ts: message.metadata?.ts || null },
         );
-        await store.save();
+        changed = true;
       }
+      if (messageId) {
+        const entry = this.#updateTranscriptByMessageId(context, messageId, {
+          state: message.metadata?.state || message.text || "read",
+          reason: message.metadata?.reason || null,
+          updatedAt: message.metadata?.ts || new Date().toISOString(),
+        });
+        changed ||= Boolean(entry);
+      }
+      if (changed) await store.save();
       await this.#ack(context, message.id);
       this.#broadcast("receipt", message);
       return;
@@ -439,6 +579,18 @@ class LocalBroker {
             && waiter.client.frontend.taskId === outbound.ownerTaskId,
         );
         outbound.response = message;
+        this.#recordTranscript(context, {
+          id: `message:${message.id}`,
+          messageId: message.id,
+          requestId: outbound.requestId,
+          direction: "inbound",
+          kind: "response",
+          author: message.metadata?.displayName || message.from,
+          text: message.text,
+          state: "unread",
+          createdAt: message.receivedAt,
+          updatedAt: message.receivedAt,
+        });
         recordActivity(store.data, {
           kind: "inbound",
           messageKind: "response",
@@ -478,8 +630,8 @@ class LocalBroker {
         await this.#ack(context, message.id);
         return;
       }
-      const deadline = Date.parse(message.metadata?.deadline || 0);
-      if (deadline && deadline <= Date.now()) {
+      const deadline = requestDeadlineMs(message);
+      if (deadline !== null && deadline <= Date.now()) {
         await this.#sendReceipt(context, id, "expired");
         await this.#ack(context, message.id);
         return;
@@ -497,6 +649,18 @@ class LocalBroker {
       attempts: 0,
       receivedAt: new Date().toISOString(),
     };
+    this.#recordTranscript(context, {
+      id: `message:${message.id}`,
+      messageId: message.id,
+      requestId: entry.requestId,
+      direction: "inbound",
+      kind: message.kind,
+      author: message.metadata?.displayName || message.from,
+      text: message.text,
+      state: message.kind === "request" ? entry.state : "unread",
+      createdAt: message.receivedAt || entry.receivedAt,
+      updatedAt: entry.receivedAt,
+    });
     recordActivity(store.data, {
       kind: "inbound",
       messageKind: message.kind,
@@ -539,13 +703,31 @@ class LocalBroker {
       entry.state = "claimed";
       entry.claimedBy = client.id;
       entry.leaseUntil = new Date(Date.now() + claimLeaseMs).toISOString();
-      await store.save();
-      await this.#sendReceipt(this.context, entry.requestId, "claimed");
-      return entry.message;
+      if (this.#isOwnerInstruction(entry)) {
+        await this.#recordOwnerInstructionState(this.context, entry, "claimed");
+      } else {
+        await store.save();
+        await this.#sendReceipt(this.context, entry.requestId, "claimed");
+      }
+      // An agent must never decide whether something is an owner instruction
+      // from peer-controlled transport metadata. The broker supplies it only
+      // for a record it created locally.
+      return {
+        ...entry.message,
+        metadata: {
+          ...entry.message.metadata,
+          ownerMessage: this.#isOwnerInstruction(entry),
+        },
+      };
     }
     const index = store.data.messages.indexOf(entry);
     if (index >= 0) store.data.messages.splice(index, 1);
+    this.#updateTranscriptByMessageId(this.context, entry.message.id, {
+      state: "read",
+      updatedAt: new Date().toISOString(),
+    });
     await store.save();
+    await this.#sendMessageReceipt(this.context, entry.message, "read");
     return entry.message;
   }
 
@@ -684,12 +866,25 @@ class LocalBroker {
         question: params.retainQuestion ? question.slice(0, maxRetainedQuestion) : null,
         ownerTaskId: client.frontend.taskId,
         ownerFrontendId: client.frontend.frontendId,
+        envelopeId: createMessageId(),
         state: "queued_local",
         deadline,
         receipts: [{ state: "queued_local", reason: null, ts: new Date().toISOString() }],
         createdAt: new Date().toISOString(),
       };
       context.store.data.outbound[id] = outbound;
+      this.#recordTranscript(context, {
+        id: `request:${id}`,
+        messageId: outbound.envelopeId,
+        requestId: id,
+        direction: "outbound",
+        kind: "request",
+        author: context.config.displayName,
+        text: question,
+        state: outbound.state,
+        createdAt: outbound.createdAt,
+        updatedAt: outbound.createdAt,
+      });
       await context.store.save();
     } else {
       outbound.questionHash ||= questionHash;
@@ -703,8 +898,20 @@ class LocalBroker {
       outbound.receipts ||= [];
     }
     if (!outbound.envelopeId) {
+      // A store written by an older broker may predate the stable message ID.
+      // Allocate it before sending so an early delivery/read receipt can still
+      // update the bubble that the owner sees.
+      outbound.envelopeId = createMessageId();
+      this.#recordTranscript(context, {
+        id: `request:${id}`,
+        messageId: outbound.envelopeId,
+        updatedAt: new Date().toISOString(),
+      });
+      await context.store.save();
+    }
+    if (outbound.state === "queued_local") {
       try {
-        outbound.envelopeId = await context.bridge.send(question, {
+        await context.bridge.send(question, {
           kind: "request",
           metadata: {
             displayName: context.config.displayName,
@@ -712,6 +919,7 @@ class LocalBroker {
             routingKey: params.routingKey || {},
             deadline: outbound.deadline,
           },
+          messageId: outbound.envelopeId,
         });
         this.#recordOutboundState(outbound, "relay_acked");
       } catch (error) {
@@ -741,6 +949,62 @@ class LocalBroker {
     return { response: outbound.response || null, status };
   }
 
+  async #sendOwnerInstruction(client, params) {
+    if (client.frontend.clientType !== "desktop") {
+      throw new Error("Only the owner desktop window may send an owner instruction");
+    }
+    const context = this.context;
+    const question = params.question?.trim();
+    if (!question) throw new Error("question is required");
+    if (question.length > maxRetainedQuestion) {
+      throw new Error(`question may not exceed ${maxRetainedQuestion} characters`);
+    }
+    const requestId = `owner-${randomUUID()}`;
+    const messageId = `owner-${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    const message = {
+      id: messageId,
+      kind: "request",
+      from: "owner",
+      text: question,
+      metadata: {
+        displayName: "Owner",
+        requestId,
+      },
+    };
+    const entry = {
+      source: "owner",
+      message,
+      requestId,
+      state: "queued",
+      attempts: 0,
+      receivedAt: createdAt,
+    };
+    context.store.data.messages.push(entry);
+    this.#recordTranscript(context, {
+      id: `owner-request:${requestId}`,
+      messageId,
+      requestId,
+      direction: "inbound",
+      kind: "owner_request",
+      author: "Owner",
+      text: question,
+      state: "queued",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    recordActivity(context.store.data, {
+      kind: "owner",
+      messageKind: "owner_request",
+      requestId,
+      state: "queued",
+    }, maxActivityEntries);
+    await context.store.save();
+    this.#broadcast("owner_instruction", { requestId, receivedAt: createdAt });
+    await this.#dispatch();
+    return { requestId, state: "queued" };
+  }
+
   async #respond(client, params) {
     const context = this.context;
     const entry = context.store.data.messages.find(
@@ -753,18 +1017,65 @@ class LocalBroker {
     }
     const body = params.text?.trim();
     if (!body) throw new Error("response text is required");
+    if (this.#isOwnerInstruction(entry)) {
+      const responseId = `owner-${randomUUID()}`;
+      const createdAt = new Date().toISOString();
+      this.#recordTranscript(context, {
+        id: `owner-response:${responseId}`,
+        messageId: responseId,
+        requestId: entry.requestId,
+        direction: "outbound",
+        kind: "owner_response",
+        author: context.config.displayName,
+        text: body,
+        state: "responded",
+        createdAt,
+        updatedAt: createdAt,
+      });
+      const entryIndex = context.store.data.messages.indexOf(entry);
+      if (entryIndex >= 0) context.store.data.messages.splice(entryIndex, 1);
+      await this.#recordOwnerInstructionState(context, entry, "responded");
+      recordActivity(context.store.data, {
+        kind: "owner",
+        messageKind: "owner_response",
+        requestId: entry.requestId,
+        state: "responded",
+      }, maxActivityEntries);
+      await context.store.save();
+      return { requestId: entry.requestId, responseId, ownerOnly: true };
+    }
     context.store.data.completed[entry.requestId] = {
       body,
       completedAt: new Date().toISOString(),
     };
     await context.store.save();
-    const responseId = await context.bridge.send(body, {
+    const responseId = createMessageId();
+    const createdAt = new Date().toISOString();
+    this.#recordTranscript(context, {
+      id: `message:${responseId}`,
+      messageId: responseId,
+      requestId: entry.requestId,
+      direction: "outbound",
+      kind: "response",
+      author: context.config.displayName,
+      text: body,
+      state: "queued_local",
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await context.store.save();
+    await context.bridge.send(body, {
       kind: "response",
       metadata: {
         ...(params.metadata || {}),
         displayName: context.config.displayName,
         replyTo: entry.requestId,
       },
+      messageId: responseId,
+    });
+    this.#updateTranscriptState(context, `message:${responseId}`, {
+      state: "sent",
+      updatedAt: new Date().toISOString(),
     });
     recordActivity(context.store.data, {
       kind: "outbound",
@@ -789,18 +1100,49 @@ class LocalBroker {
     delete entry.claimedBy;
     delete entry.leaseUntil;
     await this.context.store.save();
+    if (this.#isOwnerInstruction(entry)) {
+      await this.#recordOwnerInstructionState(
+        this.context,
+        entry,
+        entry.state === "dead_letter" ? "declined" : "queued",
+        entry.state === "dead_letter" ? "claim attempt limit reached" : null,
+      );
+    }
     if (entry.state === "dead_letter") {
-      await this.#sendReceipt(this.context, entry.requestId, "declined", "claim attempt limit reached");
-      void notifyIncomingRequest({
-        peerAlias: entry.message.metadata?.displayName || entry.message.from,
-        pendingCount: this.context.store.data.messages.filter(
-          (item) => item.message.kind === "request" && item.state !== "responded",
-        ).length,
-        settingsPath: path.join(path.dirname(this.context.config.configPath), "notifications.json"),
-      });
+      if (!this.#isOwnerInstruction(entry)) {
+        await this.#sendReceipt(this.context, entry.requestId, "declined", "claim attempt limit reached");
+        void notifyIncomingRequest({
+          peerAlias: entry.message.metadata?.displayName || entry.message.from,
+          pendingCount: this.context.store.data.messages.filter(
+            (item) => item.message.kind === "request" && item.state !== "responded",
+          ).length,
+          settingsPath: path.join(path.dirname(this.context.config.configPath), "notifications.json"),
+        });
+      }
     }
     await this.#dispatch();
     return { released: true, state: entry.state };
+  }
+
+  #transcriptPage(params = {}) {
+    const limit = Math.min(Math.max(Math.floor(Number(params.limit) || 100), 1), 100);
+    const newestFirst = [...(this.context.store.data.transcript || [])]
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+        || b.id.localeCompare(a.id));
+    const cursorId = typeof params.before?.id === "string" ? params.before.id : null;
+    const cursorIndex = cursorId
+      ? newestFirst.findIndex((entry) => entry.id === cursorId)
+      : -1;
+    const start = cursorIndex >= 0 ? cursorIndex + 1 : 0;
+    const page = newestFirst.slice(start, start + limit);
+    const nextBefore = start + page.length < newestFirst.length && page.length
+      ? { id: page.at(-1).id }
+      : null;
+    return {
+      messages: page.reverse(),
+      nextBefore,
+      total: newestFirst.length,
+    };
   }
 
   async #handle(client, method, params) {
@@ -838,10 +1180,30 @@ class LocalBroker {
       };
     }
     if (method === "send") {
-      const messageId = await context.bridge.send(params.text, {
+      const messageId = createMessageId();
+      const createdAt = new Date().toISOString();
+      this.#recordTranscript(context, {
+        id: `message:${messageId}`,
+        messageId,
+        requestId: params.metadata?.requestId || params.metadata?.replyTo || null,
+        direction: "outbound",
+        kind: params.kind || "chat",
+        author: context.config.displayName,
+        text: params.text,
+        state: "queued_local",
+        createdAt,
+        updatedAt: createdAt,
+      });
+      await context.store.save();
+      await context.bridge.send(params.text, {
         kind: params.kind,
         metadata: params.metadata,
         to: params.to,
+        messageId,
+      });
+      this.#updateTranscriptState(context, `message:${messageId}`, {
+        state: "sent",
+        updatedAt: new Date().toISOString(),
       });
       recordActivity(context.store.data, {
         kind: "outbound",
@@ -849,7 +1211,7 @@ class LocalBroker {
         requestId: params.metadata?.requestId || params.metadata?.replyTo || null,
         state: "sent",
       }, maxActivityEntries);
-      context.store.markDirty();
+      await context.store.save();
       return { messageId };
     }
     if (method === "wait") return this.#wait(client, params);
@@ -858,6 +1220,7 @@ class LocalBroker {
       const outbound = await this.#sendRequest(client, params);
       return this.#outboundSummary(outbound);
     }
+    if (method === "owner_request_send") return this.#sendOwnerInstruction(client, params);
     if (method === "request_status") return this.#requestStatus(client, params);
     if (method === "ask") return this.#ask(client, params);
     if (method === "mark_processing") {
@@ -870,8 +1233,12 @@ class LocalBroker {
       }
       entry.state = "processing";
       entry.leaseUntil = new Date(Date.now() + claimLeaseMs).toISOString();
-      await context.store.save();
-      await this.#sendReceipt(context, entry.requestId, "processing");
+      if (this.#isOwnerInstruction(entry)) {
+        await this.#recordOwnerInstructionState(context, entry, "processing");
+      } else {
+        await context.store.save();
+        await this.#sendReceipt(context, entry.requestId, "processing");
+      }
       return { requestId: entry.requestId, state: entry.state };
     }
     if (method === "respond") return this.#respond(client, params);
@@ -886,6 +1253,7 @@ class LocalBroker {
           routingKey: entry.message.metadata?.routingKey || {},
           from: entry.message.from,
           displayName: entry.message.metadata?.displayName || entry.message.from,
+          ownerMessage: this.#isOwnerInstruction(entry),
           text: entry.message.text,
         }));
     }
@@ -1005,6 +1373,7 @@ class LocalBroker {
           })),
       };
     }
+    if (method === "transcript_list") return this.#transcriptPage(params);
     if (method === "activity_tail") {
       const activity = context.store.data.activity || [];
       const limit = Math.min(Math.max(Math.floor(Number(params.limit) || 100), 1), maxActivityEntries);
@@ -1118,6 +1487,7 @@ class LocalBroker {
   async #disconnect(client) {
     if (!this.clients.delete(client.id)) return;
     const deadLetters = [];
+    const ownerRequeued = [];
     for (const waiter of [...this.waiters]) {
       if (waiter.client !== client) continue;
       const index = this.waiters.indexOf(waiter);
@@ -1146,15 +1516,26 @@ class LocalBroker {
       delete entry.claimedBy;
       delete entry.leaseUntil;
       if (entry.state === "dead_letter") deadLetters.push(entry);
+      if (this.#isOwnerInstruction(entry)) ownerRequeued.push(entry);
     }
     await this.context?.store.save();
+    for (const entry of ownerRequeued) {
+      await this.#recordOwnerInstructionState(
+        this.context,
+        entry,
+        entry.state === "dead_letter" ? "declined" : "queued",
+        entry.state === "dead_letter" ? "claim attempt limit reached" : null,
+      );
+    }
     for (const outbound of Object.values(this.context?.store.data.outbound || {})) {
       if (outbound.ownerTaskId === client.frontend.taskId) {
         await this.#notifyUncollectedIfNeeded(this.context, outbound);
       }
     }
     for (const entry of deadLetters) {
-      await this.#sendReceipt(this.context, entry.requestId, "declined", "claim attempt limit reached");
+      if (!this.#isOwnerInstruction(entry)) {
+        await this.#sendReceipt(this.context, entry.requestId, "declined", "claim attempt limit reached");
+      }
     }
     await this.#dispatch();
     const idleExitMs = Number(process.env.AGENT_LINK_BROKER_IDLE_EXIT_MS || 0);
@@ -1190,10 +1571,11 @@ class LocalBroker {
     let changed = false;
     const expired = [];
     const deadLetters = [];
+    const ownerRequeued = [];
     const now = Date.now();
     for (const entry of [...context.store.data.messages]) {
-      const deadline = Date.parse(entry.message.metadata?.deadline || 0);
-      if (entry.message.kind === "request" && deadline && deadline <= now) {
+      const deadline = requestDeadlineMs(entry.message);
+      if (entry.message.kind === "request" && deadline !== null && deadline <= now) {
         context.store.data.messages.splice(context.store.data.messages.indexOf(entry), 1);
         expired.push(entry);
         changed = true;
@@ -1205,6 +1587,7 @@ class LocalBroker {
       delete entry.claimedBy;
       delete entry.leaseUntil;
       if (entry.state === "dead_letter") deadLetters.push(entry);
+      if (this.#isOwnerInstruction(entry)) ownerRequeued.push(entry);
       changed = true;
     }
     for (const outbound of Object.values(context.store.data.outbound)) {
@@ -1219,9 +1602,22 @@ class LocalBroker {
     }
     if (changed) {
       await context.store.save();
-      for (const entry of expired) await this.#sendReceipt(context, entry.requestId, "expired");
+      for (const entry of expired) {
+        if (this.#isOwnerInstruction(entry)) {
+          await this.#recordOwnerInstructionState(context, entry, "expired");
+        } else {
+          await this.#sendReceipt(context, entry.requestId, "expired");
+        }
+      }
       for (const entry of deadLetters) {
-        await this.#sendReceipt(context, entry.requestId, "declined", "claim attempt limit reached");
+        if (this.#isOwnerInstruction(entry)) {
+          await this.#recordOwnerInstructionState(context, entry, "declined", "claim attempt limit reached");
+        } else {
+          await this.#sendReceipt(context, entry.requestId, "declined", "claim attempt limit reached");
+        }
+      }
+      for (const entry of ownerRequeued) {
+        if (entry.state !== "dead_letter") await this.#recordOwnerInstructionState(context, entry, "queued");
       }
       await this.#dispatch();
     }

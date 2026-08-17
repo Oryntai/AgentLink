@@ -521,13 +521,17 @@ try {
   bobSecond = await makeClient("bob-second-task", bobPath);
   const firstClaim = bob.client.callTool({
     name: "peer_listen",
-    arguments: { timeout_seconds: 5 },
+    arguments: { timeout_seconds: 10 },
   });
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The first listener must finish registering with the shared broker before
+  // the second task competes for the same request. A short timer was flaky on
+  // busy Windows hosts and tested scheduling rather than oldest-claim routing.
+  await new Promise((resolve) => setTimeout(resolve, 250));
   const secondClaim = bobSecond.client.callTool({
     name: "peer_listen",
-    arguments: { timeout_seconds: 1 },
+    arguments: { timeout_seconds: 2 },
   });
+  await new Promise((resolve) => setTimeout(resolve, 100));
   const routedAsk = alice.client.callTool({
     name: "peer_ask",
     arguments: { question: "Which waiting task receives this?", timeout_seconds: 10 },

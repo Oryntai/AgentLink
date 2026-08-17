@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { loadBridgeConfig } from "../src/config.js";
+import { installCodexAgentSkill } from "./install-agent-skill.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -122,16 +123,20 @@ async function installClaudeDesktopDirect(mcpScript, configPath) {
 
 const args = parseArgs(process.argv.slice(2));
 if (!args.config || !args.client) {
-  console.error("Usage: node scripts/install-mcp.js --config PATH --client codex|claude|claude-desktop");
+  console.error("Usage: node scripts/install-mcp.js --config PATH --client codex|claude|claude-desktop [--bootstrap]");
   process.exit(1);
 }
 
-const config = await loadBridgeConfig(args.config);
+const config = args.bootstrap === "true"
+  ? { configPath: path.resolve(args.config) }
+  : await loadBridgeConfig(args.config);
 const mcpScript = path.join(rootDir, "src", "mcp-server.js");
 const name = "agent-link";
 
 if (args.client === "codex") {
   const changed = await installCodexDirect(mcpScript, config.configPath);
+  const skillPath = await installCodexAgentSkill();
+  console.log(`AgentLink Messenger skill installed at ${skillPath}`);
   console.log(changed
     ? "Permanent Codex MCP installed. Restart Codex Desktop once; future rooms hot-reload."
     : "Codex MCP is ready. The active room will hot-reload without a GUI restart.");

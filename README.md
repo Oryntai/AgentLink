@@ -20,7 +20,7 @@ Two developers often have access to different repositories, databases, or enviro
 - The responder leaves `peer_listen`, performs local read-only work, replies, and listens again.
 - Requests received without a listener remain in an encrypted local inbox and trigger an owner notification.
 - A permanent MCP installation hot-reloads `.agent-link/active.json`; new rooms do not require a GUI restart.
-- A desktop window reads the link, the peer identity, pending requests, and metadata-only activity from the local broker, and creates or joins rooms without a terminal.
+- A desktop window works like a messenger: the owner sees the encrypted agent chat, delivery/read states, peer identity, pending requests, and a metadata-only activity ring; it can create or join rooms without a terminal.
 - A person can ask the peer's agent from that window without running an agent of their own, and the owner decides whether each request waits for approval.
 - Invites are single-use expiring codes, and a room binds to the first peer key that proves membership.
 - Completing one structured goal leaves the encrypted transport connected for later questions.
@@ -106,7 +106,7 @@ After the first AgentLink installation, fully quit and restart each GUI once so 
 npm run desktop
 ```
 
-An Electron window over the local broker. It shows the link state, the room, this agent, the peer's agent ID with its key fingerprint and verification state, pending requests, and a metadata-only activity ring. It never shows message text: the renderer is sandboxed behind a context bridge whose only capabilities are asking for a snapshot and invoking the actions below.
+An Electron window over the local broker. Its three-column messenger view keeps the current room and connection entry point on the left, the full owner-visible agent conversation in the center, and participants, room controls, invitations, approvals, and metadata on the right. Every outgoing chat bubble shows whether it is sent, delivered, read, being handled, or answered. Conversation text remains encrypted in the owner-side broker store and reaches the sandboxed renderer only through its fixed context bridge; it never enters the activity ring or ordinary logs.
 
 From the window an owner can:
 
@@ -116,11 +116,34 @@ From the window an owner can:
 - revoke an invite that is still pending;
 - confirm the peer's key fingerprint after checking it out of band;
 - ask the peer's agent a question and read the answer;
+- review the full local agent transcript, including whether a peer agent has received or read each outgoing message;
 - hold incoming requests for approval, then approve or deny each one.
 
-Creating or joining a room rewrites the participant configs and the running broker reloads them, so no GUI or task restart is required. Room creation reuses the relay already configured for that config; start `npm run host` or point the config at a permanent relay first.
+Creating or joining a room rewrites the participant configs and the running broker reloads them, so no GUI or task restart is required. On a machine that has never joined before, paste a single-use invite in the desktop window: it creates the responder identity, prepares the permanent Codex MCP connection and installs the AgentLink skill. Restart Codex once after that first join. Room creation reuses the relay already configured for that config; start `npm run host` or point the config at a permanent relay first.
 
-On a machine without Electron or without a display, `npm run desktop:web` serves the same view on `http://127.0.0.1:4737` and opens it as a chromeless window in an installed Chromium browser. That page is read-only: it has no room, invite, verification, ask, or approval actions.
+## One owner: Local Duo
+
+For two agents owned by the same person, use **My local agents** in the desktop window instead of giving two Codex tasks the same `active.json` identity.
+
+1. Set a room name, the two agent names, and their working folders, then choose **Create local duo**. AgentLink creates exactly two independent identities and starts a relay bound only to `127.0.0.1`.
+2. Restart Codex once if AgentLink has not been installed before, then open two separate Codex tasks. Copy the Builder prompt into one and the Reviewer prompt into the other.
+3. Each task calls `peer_local_duo_claim` once, selecting its own profile, then follows the installed AgentLink Messenger routine. The central chat now shows their encrypted exchange and read states.
+
+The desktop window deliberately does not impersonate a model or silently launch a task. A profile is claimed by one live Codex task at a time, so two windows can never accidentally communicate under one identity. Give concurrent code-writing agents separate worktrees when they may edit the same repository.
+
+## Agent routine
+
+During `npm run host` or `npm run join -- --client codex`, AgentLink also installs the reusable `agentlink-messenger` skill into the Codex skills folder. In future tasks, a Codex agent that has the AgentLink MCP available knows to check the peer status and inbox, use blocking or non-blocking requests deliberately, serve queued work safely, and keep a joint goal alive until it is complete. Restart Codex once after the first installation so it discovers the new skill.
+
+To install or refresh that routine manually:
+
+```powershell
+npm run install-skill -- --client codex
+```
+
+The skill does not bypass consent or access controls: peer text stays untrusted, secrets remain local, and manual approvals continue to hold a request before any local agent can read it.
+
+On a machine without Electron or without a display, `npm run desktop:web` serves a read-only snapshot, including the latest 100 transcript messages, on `http://127.0.0.1:4737` and opens it as a chromeless window in an installed Chromium browser. That page has no room, invite, verification, ask, or approval actions.
 
 ## Invites and peer binding
 
@@ -147,7 +170,7 @@ npm run guest -- --invite "al1...." --name "Alice"
 npm run desktop
 ```
 
-Type the question under **Ask the peer's agent**; the answer appears below it once their agent replies. The window keeps the questions asked from it together with their answers, and nothing else in it shows message text.
+Type the question under **Agent conversation**; the answer appears in the same local encrypted transcript once their agent replies.
 
 ### What the owner controls
 
@@ -292,6 +315,7 @@ Use AgentLink as the responder. Wait for the proposed goal through peer_goal, ac
 - Trust state is scoped per room, and every shared local state file is written atomically and merged under a cross-process lock, so two processes on one config cannot clobber pinned keys or bindings.
 - A frontend negotiates the broker's protocol version, client range, and method list before using it, and replaces an incompatible broker only through authenticated takeover, never by signalling a pid.
 - The broker activity ring holds metadata only: timestamps, kinds, request IDs, peer aliases, states, and reasons. Request text can never enter it.
+- The owner-visible transcript is stored separately inside the encrypted local broker store. It is never sent to the relay as transcript data, copied into the activity ring, or written to ordinary logs.
 - Under the manual approval policy a peer request is held by the broker: it is absent from the inbox an agent reads, cannot be claimed, and wakes no listener until the owner approves it.
 - Relay rooms, pending messages, and logs have quotas, TTLs, and rotation.
 - Sensitive local JSONL fields are encrypted with a key derived from the local identity key.
