@@ -20,17 +20,18 @@ const broker = new BrokerClient(config, { requiredMethods: DESKTOP_BROKER_METHOD
 
 async function readState() {
   try {
-    const [status, activity, inbox] = await Promise.all([
+    const [status, activity, inbox, transcript] = await Promise.all([
       broker.remoteStatus(),
       broker.activityTail(60),
       broker.listInbox(),
+      broker.listTranscript({ limit: 100 }),
     ]);
     return {
       ok: true,
       configPath,
       status,
       activity: activity.activity || [],
-      // Metadata only: the desktop view never shows request text it did not ask for.
+      transcript,
       inbox: inbox.map((entry) => ({
         requestId: entry.requestId,
         state: entry.state,
@@ -99,6 +100,13 @@ const page = `<!doctype html>
   td { padding: 7px 16px; border-bottom: 1px solid var(--line); font-family: ui-monospace, monospace; }
   tr:last-child td { border-bottom: 0; }
   .empty { padding: 18px 16px; color: var(--muted); }
+  .chat { max-height: 560px; overflow: auto; padding: 14px 16px; background: var(--bg); }
+  .bubble { width: fit-content; max-width: min(82%, 720px); margin: 0 0 12px; padding: 10px 12px 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+  .bubble.outgoing { margin-left: auto; border-color: var(--ok); }
+  .bubble-meta { display: flex; justify-content: space-between; gap: 18px; color: var(--muted); font-size: 11px; }
+  .bubble-body { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; }
+  .receipt { font-size: 11px; color: var(--muted); }
+  .outgoing .receipt { text-align: right; color: var(--ok); }
   footer { padding: 0 24px 28px; color: var(--muted); font-size: 12px; }
 </style>
 </head>
@@ -118,6 +126,10 @@ const page = `<!doctype html>
     <div class="rows" id="peer-rows"></div>
   </section>
   <section>
+    <h2>Agent conversation</h2>
+    <div class="chat" id="transcript"></div>
+  </section>
+  <section>
     <h2>Pending requests</h2>
     <div class="scroll" id="inbox"></div>
   </section>
@@ -126,7 +138,7 @@ const page = `<!doctype html>
     <div class="scroll" id="activity"></div>
   </section>
 </main>
-<footer>Reads the local broker over authenticated IPC. Message text is never shown here.</footer>
+<footer>Conversation text stays in the encrypted local broker store. This read-only view shows the latest 100 messages.</footer>
 <script>
   const rows = (target, pairs) => {
     document.getElementById(target).innerHTML = pairs
@@ -135,6 +147,23 @@ const page = `<!doctype html>
   };
   const esc = (value) => String(value ?? "—").replace(/[<>&]/g, (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   const time = (value) => (value ? new Date(value).toLocaleTimeString() : "—");
+  const outbound = {
+    queued_local: "Sending…", relay_acked: "Sent to relay", sent: "Sent to relay",
+    delivered: "Delivered", queued: "Delivered · waiting for agent",
+    held: "Delivered · waiting for approval", claimed: "Read by their agent",
+    processing: "Read · their agent is working", responded: "Read · answered",
+    read: "Read by their agent", declined: "Declined", expired: "Expired",
+  };
+  const inbound = {
+    unread: "Not read by your agent", queued: "Waiting for your agent",
+    held: "Waiting for your approval", claimed: "Read by your agent",
+    processing: "Your agent is working", responded: "Your agent replied",
+    read: "Read by your agent", declined: "Declined", expired: "Expired",
+  };
+  const messageStatus = (m) => {
+    const label = (m.direction === "outbound" ? outbound : inbound)[m.state] || m.state || "Recorded";
+    return m.reason ? label + " · " + m.reason : label;
+  };
 
   async function refresh() {
     let state;
@@ -173,6 +202,14 @@ const page = `<!doctype html>
         ["bound at", time(peer.boundAt)],
       ]
       : [["status", "no peer bound to this room yet"]]);
+
+    const transcript = state.transcript?.messages || [];
+    document.getElementById("transcript").innerHTML = transcript.length
+      ? transcript.map((m) => '<article class="bubble ' + (m.direction === "outbound" ? "outgoing" : "incoming") + '">'
+        + '<div class="bubble-meta"><span>' + esc(m.author) + '</span><span>' + esc(m.kind) + ' · ' + time(m.createdAt) + '</span></div>'
+        + '<div class="bubble-body">' + esc(m.text) + '</div>'
+        + '<div class="receipt">' + (m.direction === "outbound" ? "✓ " : "") + esc(messageStatus(m)) + '</div></article>').join("")
+      : '<div class="empty">The agents have not exchanged messages in this room yet.</div>';
 
     const inbox = state.inbox || [];
     document.getElementById("inbox").innerHTML = inbox.length

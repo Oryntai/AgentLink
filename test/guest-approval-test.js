@@ -39,6 +39,11 @@ const conversationFor = async (client, requestId) => {
   return conversations.find((record) => record.requestId === requestId) || null;
 };
 
+const transcriptFor = async (client, predicate) => {
+  const { messages } = await client.listTranscript({ limit: 100 });
+  return messages.find(predicate) || null;
+};
+
 process.env.AGENT_LINK_NOTIFY = "0";
 process.env.AGENT_LINK_BROKER_IDLE_EXIT_MS = "1500";
 
@@ -125,6 +130,12 @@ try {
   assert.equal(waiting.length, 1);
   assert.equal(waiting[0].question, question, "the owner must see what is being asked");
   assert.equal(waiting[0].requestId, asked.request_id);
+  const heldInTranscript = await waitFor("the held request in the owner transcript", () =>
+    transcriptFor(hostWindow, (message) => message.requestId === asked.request_id
+      && message.direction === "inbound"),
+  );
+  assert.equal(heldInTranscript.text, question);
+  assert.equal(heldInTranscript.state, "held");
 
   assert.deepEqual(
     await hostAgent.listInbox(),
@@ -165,6 +176,35 @@ try {
     return record?.state === "responded" ? record : null;
   });
   assert.equal(answered.answer, "user 42 is on the free plan");
+  const guestAnswer = await waitFor("the answer in the guest transcript", () =>
+    transcriptFor(guestWindow, (message) => message.requestId === asked.request_id
+      && message.kind === "response" && message.direction === "inbound"),
+  );
+  assert.equal(guestAnswer.text, "user 42 is on the free plan");
+
+  // Reading a response through the normal agent status API sends a read
+  // receipt, so the answering side can show a familiar chat-style status.
+  await guestWindow.requestStatus({ requestId: asked.request_id });
+  const answerRead = await waitFor("the read receipt on the host response", () =>
+    transcriptFor(hostWindow, (message) => message.requestId === asked.request_id
+      && message.kind === "response" && message.direction === "outbound"
+      && message.state === "read"),
+  );
+  assert.equal(answerRead.text, "user 42 is on the free plan");
+
+  // Structured-goal chat uses the generic send/wait path rather than a
+  // request/response pair. It still appears in the transcript and receives a
+  // read receipt once the other agent consumes it.
+  const chatId = await hostAgent.send("Goal accepted. I will inspect the migration.", {
+    kind: "chat",
+    metadata: { displayName: "Host" },
+  });
+  const chat = await guestWindow.wait({ kinds: ["chat"], timeoutMs: 5_000 });
+  assert.equal(chat.text, "Goal accepted. I will inspect the migration.");
+  const chatRead = await waitFor("the read receipt on the structured chat", () =>
+    transcriptFor(hostWindow, (message) => message.messageId === chatId && message.state === "read"),
+  );
+  assert.equal(chatRead.kind, "chat");
 
   // 3. Denying ends the request, and the guest is told without a reason leak.
   const denied = await guestWindow.requestSend("delete the users table", { retainQuestion: true });

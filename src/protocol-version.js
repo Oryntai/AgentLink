@@ -1,5 +1,5 @@
-export const BROKER_PROTOCOL_VERSION = 3;
-export const DESKTOP_API_VERSION = 2;
+export const BROKER_PROTOCOL_VERSION = 4;
+export const DESKTOP_API_VERSION = 3;
 
 export const MIN_BROKER_PROTOCOL_VERSION = 2;
 
@@ -27,6 +27,7 @@ export const CORE_BROKER_METHODS = Object.freeze([
 
 export const DESKTOP_BROKER_METHODS = Object.freeze([
   ...CORE_BROKER_METHODS,
+  "owner_request_send",
   "activity_tail",
   "room_create",
   "room_join",
@@ -39,6 +40,7 @@ export const DESKTOP_BROKER_METHODS = Object.freeze([
   "approval_list",
   "approval_decide",
   "conversation_list",
+  "transcript_list",
 ]);
 
 export const BROKER_METHODS = DESKTOP_BROKER_METHODS;

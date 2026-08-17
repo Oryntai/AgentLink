@@ -3,150 +3,171 @@
 <head>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'">
-<title>AgentLink</title>
+<title>AgentLink Messenger</title>
 <style>
   :root {
-    color-scheme: light dark;
-    --bg: #f6f7f9; --panel: #ffffff; --ink: #14161a; --muted: #5d6470;
-    --line: #e3e6ea; --ok: #157f4a; --warn: #9a6b00; --bad: #a32020;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #14161a; --panel: #1c1f25; --ink: #eef1f5; --muted: #99a1ad;
-      --line: #2b3038; --ok: #4ec98a; --warn: #e0b34d; --bad: #ef7a7a;
-    }
+    color-scheme: dark;
+    --bg: #0b1020; --rail: #10182c; --panel: #151f35; --panel-raised: #1b2742;
+    --line: #273657; --ink: #f4f7ff; --muted: #9ba9c4; --accent: #7c8cff;
+    --accent-soft: #263766; --green: #49d28c; --amber: #ffca65; --red: #ff7d8e;
+    --bubble-in: #1d2a47; --bubble-out: #5b61d8;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    min-width: 760px; min-height: 100vh; margin: 0; overflow: hidden;
+    color: var(--ink); background: var(--bg);
+    font: 14px/1.45 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  header {
-    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
-    padding: 16px 22px; border-bottom: 1px solid var(--line); background: var(--panel);
-    position: sticky; top: 0; z-index: 2;
+  button, input, textarea { font: inherit; }
+  button { color: inherit; border: 0; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .5; }
+  .app { display: grid; grid-template-columns: 274px minmax(420px, 1fr) 316px; height: 100vh; }
+  .sidebar, .details { overflow-y: auto; background: var(--rail); }
+  .sidebar { border-right: 1px solid var(--line); padding: 20px 14px; }
+  .details { border-left: 1px solid var(--line); padding: 20px 16px 28px; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 3px 8px 22px; }
+  .brand-mark, .avatar { display: grid; place-items: center; flex: 0 0 auto; border-radius: 12px; font-weight: 750; }
+  .brand-mark { width: 34px; height: 34px; color: #fff; background: linear-gradient(145deg, #8b9cff, #6166d8); box-shadow: 0 8px 22px #6572ff44; }
+  .brand h1 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+  .brand p, .small { margin: 1px 0 0; color: var(--muted); font-size: 11px; }
+  .primary, .secondary, .danger, .icon-button {
+    min-height: 36px; border-radius: 9px; padding: 8px 11px; transition: filter .15s ease, background .15s ease;
   }
-  h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
-  .path { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
-  main { padding: 18px 22px 36px; display: grid; gap: 16px; max-width: 940px; }
-  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-  section > h2 {
-    font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted);
-    margin: 0; padding: 11px 16px; border-bottom: 1px solid var(--line); font-weight: 600;
-  }
-  .rows { padding: 4px 16px 12px; }
-  .row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; }
-  .row + .row { border-top: 1px solid var(--line); }
-  .k { color: var(--muted); }
-  .v { font-family: ui-monospace, monospace; font-size: 13px; text-align: right; word-break: break-all; }
-  .pill {
-    display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px;
-    font-family: system-ui, sans-serif; border: 1px solid currentColor;
-  }
-  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
-  .scroll { max-height: 300px; overflow: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th {
-    text-align: left; color: var(--muted); font-weight: 500; font-size: 11px;
-    text-transform: uppercase; letter-spacing: 0.06em; padding: 8px 16px;
-    position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line);
-  }
-  td { padding: 7px 16px; border-bottom: 1px solid var(--line); font-family: ui-monospace, monospace; }
-  tr:last-child td { border-bottom: 0; }
-  .empty { padding: 16px; color: var(--muted); }
-  footer { padding: 0 22px 26px; color: var(--muted); font-size: 12px; }
-  .actions { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
-  input {
-    flex: 1; min-width: 0; padding: 7px 10px; border-radius: 7px; font: inherit; font-size: 13px;
-    border: 1px solid var(--line); background: var(--bg); color: var(--ink);
-  }
-  button {
-    padding: 7px 13px; border-radius: 7px; font: inherit; font-size: 13px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--bg); color: var(--ink); white-space: nowrap;
-  }
-  button:hover:not(:disabled) { border-color: var(--muted); }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .msg { padding: 0 16px 12px; font-size: 13px; min-height: 0; }
-  .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
-  pre.code { white-space: pre-wrap; max-height: 220px; overflow: auto; margin-top: 0; }
-  .compose { padding: 12px 16px 0; }
-  textarea {
-    width: 100%; min-height: 76px; padding: 9px 11px; border-radius: 7px; font: inherit;
-    font-size: 13px; border: 1px solid var(--line); background: var(--bg); color: var(--ink);
-    resize: vertical;
-  }
-  .talk { padding: 12px 16px; border-top: 1px solid var(--line); }
-  .talk .said { white-space: pre-wrap; word-break: break-word; }
-  .talk .answer { white-space: pre-wrap; word-break: break-word; margin-top: 7px; }
-  .talk .meta {
-    font-size: 11px; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.06em; margin-bottom: 5px;
-  }
-  .talk .answer.pending { color: var(--muted); }
-  .talk .decide { display: flex; gap: 8px; margin-top: 10px; }
-  .code {
-    margin: 0 16px 12px; padding: 10px 12px; border-radius: 7px; background: var(--bg);
-    border: 1px solid var(--line); font-family: ui-monospace, monospace; font-size: 12px;
-    word-break: break-all; user-select: all;
-  }
+  .primary { color: #fff; background: var(--accent); font-weight: 650; }
+  .primary:hover:not(:disabled) { filter: brightness(1.1); }
+  .secondary { color: var(--ink); background: var(--panel-raised); border: 1px solid var(--line); }
+  .secondary:hover:not(:disabled), .icon-button:hover:not(:disabled) { background: #233252; }
+  .danger { color: var(--red); background: #3b2031; }
+  .new-link { width: 100%; margin-bottom: 22px; }
+  .section-label { margin: 0 8px 8px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .conversation-item { width: 100%; display: flex; gap: 10px; text-align: left; padding: 11px; border-radius: 11px; background: var(--accent-soft); }
+  .conversation-item .avatar { width: 34px; height: 34px; color: #dfe4ff; background: #364270; }
+  .conversation-copy { min-width: 0; flex: 1; }
+  .conversation-name { display: flex; justify-content: space-between; gap: 8px; font-weight: 650; }
+  .conversation-preview { overflow: hidden; margin-top: 2px; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; background: var(--muted); }
+  .status-dot.online { background: var(--green); box-shadow: 0 0 0 3px #49d28c1f; }
+  .status-dot.waiting { background: var(--amber); }
+  .chat { display: grid; min-width: 0; min-height: 0; height: 100vh; overflow: hidden; grid-template-rows: auto minmax(0, 1fr) auto; background: radial-gradient(circle at 55% 0, #182746 0, var(--bg) 44%); }
+  .chat-head { display: flex; align-items: center; min-height: 76px; padding: 15px 22px; border-bottom: 1px solid var(--line); background: #111a2e88; }
+  .chat-head .avatar { width: 42px; height: 42px; color: #fff; background: linear-gradient(145deg, #486ca9, #24395d); }
+  .chat-title { min-width: 0; margin-left: 12px; }
+  .chat-title h2 { margin: 0; font-size: 15px; letter-spacing: -.01em; }
+  .chat-title p { overflow: hidden; margin: 2px 0 0; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; color: var(--muted); font-size: 11px; }
+  .pill.ok { color: var(--green); border-color: #49d28c55; background: #49d28c0e; }
+  .pill.warn { color: var(--amber); border-color: #ffca6555; }
+  .pill.bad { color: var(--red); border-color: #ff7d8e55; }
+  .timeline { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding: 22px clamp(18px, 5vw, 68px); scroll-behavior: smooth; scrollbar-gutter: stable; }
+  .load-older { display: block; margin: 0 auto 18px; color: var(--muted); background: transparent; font-size: 12px; }
+  .load-older:hover:not(:disabled) { color: var(--ink); }
+  .day-divider { display: flex; align-items: center; gap: 10px; margin: 10px 0 18px; color: var(--muted); font-size: 11px; }
+  .day-divider::before, .day-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .message { display: flex; gap: 9px; margin: 0 0 15px; }
+  .message.outgoing { flex-direction: row-reverse; }
+  .message .avatar { width: 29px; height: 29px; margin-top: 2px; color: #dce5ff; background: #2d3e66; font-size: 11px; }
+  .message.outgoing .avatar { background: #4b50b0; }
+  .bubble { max-width: min(76%, 640px); padding: 10px 12px 8px; border: 1px solid #33476f; border-radius: 4px 14px 14px 14px; background: var(--bubble-in); box-shadow: 0 5px 16px #03071322; }
+  .outgoing .bubble { border-color: #7d80f1; border-radius: 14px 4px 14px 14px; background: var(--bubble-out); }
+  .message-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; color: #c8d3eb; font-size: 11px; }
+  .message-meta strong { color: #fff; }
+  .message-kind { border-radius: 99px; padding: 1px 6px; background: #0b143544; text-transform: uppercase; font-size: 9px; font-weight: 700; letter-spacing: .06em; }
+  .message-body { overflow-wrap: anywhere; white-space: pre-wrap; }
+  .message-footer { display: flex; align-items: center; justify-content: flex-end; gap: 7px; margin-top: 6px; }
+  .receipt { color: #cbd6ff; font-size: 10px; text-align: right; }
+  .incoming .receipt { color: var(--muted); text-align: left; }
+  .incoming .message-footer { justify-content: flex-start; }
+  .receipt.read { color: #a7b5ff; }
+  .receipt.problem { color: #ffbac4; }
+  .copy-message { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 5px; padding: 3px; color: var(--muted); background: transparent; opacity: .72; }
+  .copy-message:hover, .copy-message.copied { color: #fff; background: #ffffff16; opacity: 1; }
+  .copy-message.copied { color: var(--green); }
+  .copy-message svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+  .empty-chat { max-width: 430px; margin: 12vh auto; padding: 26px; border: 1px dashed var(--line); border-radius: 16px; color: var(--muted); text-align: center; }
+  .empty-chat strong { display: block; margin-bottom: 6px; color: var(--ink); font-size: 15px; }
+  .compose-wrap { padding: 14px clamp(18px, 5vw, 68px) 22px; border-top: 1px solid var(--line); background: #10192d; }
+  .composer { display: flex; align-items: end; gap: 9px; padding: 8px; border: 1px solid #33476f; border-radius: 13px; background: var(--panel); }
+  textarea { min-height: 38px; max-height: 140px; width: 100%; resize: vertical; border: 0; outline: 0; color: var(--ink); background: transparent; line-height: 1.45; }
+  .recipient-picker { position: relative; align-self: stretch; flex: 0 0 136px; }
+  .recipient-trigger { width: 100%; height: 100%; min-height: 38px; padding: 7px 9px; border: 1px solid #40557f; border-radius: 9px; color: var(--ink); background: #17233c; font-size: 12px; white-space: nowrap; }
+  .recipient-trigger:hover:not(:disabled), .recipient-trigger[aria-expanded="true"] { background: #223252; }
+  .recipient-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); width: 174px; overflow: hidden; border: 1px solid #40557f; border-radius: 11px; padding: 5px; background: #17233c; box-shadow: 0 14px 34px #03071388; }
+  .recipient-option { display: block; width: 100%; border-radius: 7px; padding: 8px 9px; color: var(--muted); background: transparent; text-align: left; font-size: 12px; }
+  .recipient-option:hover, .recipient-option.selected { color: var(--ink); background: #2a3b61; }
+  textarea::placeholder, input::placeholder { color: #7786a6; }
+  .send { min-width: 74px; }
+  .stop-dialogue { min-width: 102px; align-self: stretch; white-space: nowrap; }
+  .compose-note { min-height: 17px; margin: 6px 3px 0; color: var(--muted); font-size: 11px; }
+  .compose-note.ok { color: var(--green); } .compose-note.bad { color: var(--red); }
+  .detail-card { margin-bottom: 15px; border: 1px solid var(--line); border-radius: 12px; background: #121c31; }
+  .detail-card > h3 { margin: 0; padding: 12px 13px 8px; font-size: 12px; }
+  .detail-card > p { margin: 0; padding: 0 13px 12px; color: var(--muted); font-size: 11px; }
+  .rows { padding: 0 13px 10px; }
+  .row { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px solid #263553; }
+  .row .k { color: var(--muted); font-size: 11px; }
+  .row .v { max-width: 60%; overflow-wrap: anywhere; text-align: right; font-size: 11px; }
+  .agent-card { display: flex; align-items: center; gap: 9px; padding: 0 13px 12px; }
+  .agent-card .avatar { width: 30px; height: 30px; color: #eef1ff; background: #33446b; font-size: 11px; }
+  .agent-card .agent-copy { min-width: 0; flex: 1; }
+  .agent-card strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+  .agent-card span { color: var(--muted); font-size: 10px; }
+  .field { display: grid; gap: 6px; padding: 0 13px 10px; }
+  .field label { color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+  input { width: 100%; min-width: 0; border: 1px solid #33476f; border-radius: 8px; padding: 8px 9px; color: var(--ink); background: #0c1528; font-size: 12px; }
+  .detail-actions { display: flex; gap: 7px; padding: 0 13px 13px; }
+  .detail-actions > button { flex: 1; }
+  .code { margin: 0 13px 12px; max-height: 130px; overflow: auto; border-radius: 8px; padding: 9px; color: #dce5ff; background: #0a1222; font: 10px/1.45 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+  .request { padding: 10px 13px; border-top: 1px solid #263553; }
+  .request:first-of-type { border-top: 0; }
+  .request p { margin: 0 0 8px; color: var(--ink); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .request-meta { margin-bottom: 5px; color: var(--muted); font-size: 10px; }
+  .request-actions { display: flex; gap: 7px; }
+  .request-actions button { min-height: 30px; font-size: 11px; }
+  .list { max-height: 170px; overflow: auto; }
+  .list-item { padding: 8px 13px; border-top: 1px solid #263553; color: var(--muted); font-size: 11px; }
+  .list-item strong { display: block; color: var(--ink); font-size: 11px; }
+  .skill-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 18px; padding: 11px; color: var(--muted); border-radius: 10px; background: #192440; font-size: 11px; }
+  .skill-note b { color: #cbd5ff; }
+  .hidden { display: none !important; }
+  @media (max-width: 1040px) { .app { grid-template-columns: 234px minmax(400px, 1fr); } .details { display: none; } }
 </style>
 </head>
 <body>
-<header>
-  <h1>AgentLink</h1>
-  <span id="link" class="pill warn">connecting</span>
-  <span class="path" id="config"></span>
-</header>
-<main>
-  <section>
-    <h2>Room</h2>
-    <div class="rows" id="link-rows"></div>
-    <div class="actions">
-      <input id="room-name" placeholder="Room name, e.g. Project X" maxlength="64">
-      <button id="create-room">Create room</button>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">A</div><div><h1>AgentLink</h1><p>Encrypted agent messenger</p></div></div>
+    <button id="create-invite" class="primary new-link">Connect an agent</button>
+    <p class="section-label">Current room</p>
+    <button class="conversation-item" type="button">
+      <span id="room-avatar" class="avatar">AL</span>
+      <span class="conversation-copy"><span class="conversation-name"><span id="room-title">No active room</span><span id="room-time"></span></span><span id="room-preview" class="conversation-preview">Create or join a room to connect a peer.</span></span>
+    </button>
+  </aside>
+
+  <main class="chat">
+    <header class="chat-head">
+      <div id="peer-avatar" class="avatar">?</div>
+      <div class="chat-title"><h2 id="chat-title">Agent conversation</h2><p id="chat-subtitle">Connect a trusted peer to begin.</p></div>
+      <span id="link" class="pill warn">offline</span>
+    </header>
+    <section id="timeline" class="timeline"><button id="load-older" class="load-older hidden">Load older messages</button><div id="transcript"></div></section>
+    <div class="compose-wrap">
+      <div class="composer"><textarea id="question" maxlength="4000" placeholder="Ask the peer agent a question…"></textarea><div id="owner-recipient-picker" class="recipient-picker hidden"><input id="owner-recipient" type="hidden" value="both"><button id="owner-recipient-trigger" class="recipient-trigger" type="button" aria-haspopup="menu" aria-expanded="false">Both agents ↑</button><div id="owner-recipient-menu" class="recipient-menu hidden" role="menu"><button class="recipient-option selected" type="button" data-recipient="both">Both agents</button><button class="recipient-option" type="button" data-recipient="developer">Developer</button><button class="recipient-option" type="button" data-recipient="reviewer">Reviewer</button></div></div><button id="stop-dialogue" class="danger stop-dialogue hidden" type="button" title="Stop the current agent-to-agent conversation without disconnecting them">Stop dialogue</button><button id="send-question" class="primary send">Send</button></div>
+      <div id="ask-msg" class="compose-note">Your message is an encrypted request. The peer agent decides what it can safely inspect and answer.</div>
     </div>
-    <div class="actions">
-      <input id="invite-input" placeholder="Paste an invite code (al1...)">
-      <button id="join-room">Join by code</button>
-    </div>
-    <div id="room-msg" class="msg"></div>
-  </section>
-  <section>
-    <h2>Ask the peer's agent</h2>
-    <div class="compose">
-      <textarea id="question" maxlength="4000"
-        placeholder="Ask the other owner's agent, for example: what does user_id 42 look like in the users table?"></textarea>
-    </div>
-    <div class="actions"><button id="send-question">Send question</button></div>
-    <div id="ask-msg" class="msg"></div>
-    <div class="scroll" id="conversations"></div>
-  </section>
-  <section>
-    <h2>Incoming requests</h2>
-    <div class="rows" id="policy-rows"></div>
-    <div class="actions"><button id="toggle-policy">Loading…</button></div>
-    <div id="policy-msg" class="msg"></div>
-    <div id="approvals"></div>
-  </section>
-  <section>
-    <h2>Peer</h2>
-    <div class="rows" id="peer-rows"></div>
-    <div class="actions"><button id="verify-peer">Confirm this fingerprint</button></div>
-  </section>
-  <section>
-    <h2>Invites</h2>
-    <div class="actions"><button id="create-invite">Create invite</button></div>
-    <div id="invite-code" class="code" hidden></div>
-    <div class="actions" id="brief-actions" hidden>
-      <button id="copy-brief">Copy briefing for their agent</button>
-    </div>
-    <pre id="invite-brief" class="code" hidden></pre>
-    <div class="scroll" id="invites"></div>
-  </section>
-  <section><h2>Pending requests</h2><div class="scroll" id="inbox"></div></section>
-  <section><h2>Activity (metadata only)</h2><div class="scroll" id="activity"></div></section>
-</main>
-<footer>Reads the local broker over authenticated IPC. Message text is never shown here.</footer>
+  </main>
+
+  <aside class="details">
+    <section class="detail-card"><h3>Participants</h3><div id="local-agent" class="agent-card"></div><div id="peer-agent" class="agent-card"></div><div class="detail-actions"><button id="verify-peer" class="secondary">Verify fingerprint</button></div></section>
+    <section class="detail-card"><h3>Connection</h3><div id="link-rows" class="rows"></div><div id="peer-rows" class="rows"></div></section>
+    <section class="detail-card"><h3>My local agents</h3><p>Create two independent Codex profiles for one owner. They use separate keys and connect only to each other through a local relay.</p><div class="field"><label for="local-room-name">Team room</label><input id="local-room-name" maxlength="64" placeholder="Build & review"></div><div class="field"><label for="developer-name">Builder</label><input id="developer-name" maxlength="64" placeholder="Developer"></div><div class="field"><label for="developer-workspace">Builder workspace</label><input id="developer-workspace" placeholder="D:\Project\builder"></div><div class="field"><label for="reviewer-name">Reviewer</label><input id="reviewer-name" maxlength="64" placeholder="Reviewer"></div><div class="field"><label for="reviewer-workspace">Reviewer workspace</label><input id="reviewer-workspace" placeholder="D:\Project\reviewer"></div><div class="detail-actions"><button id="create-local-duo" class="primary">Create local duo</button></div><div id="duo-msg" class="compose-note"></div><div id="duo-agents" class="list"></div><div id="duo-prompts" class="hidden"></div></section>
+    <section class="detail-card"><h3>Connect remote agent</h3><p>Create a room from a configured relay or paste the peer's single-use invite. A first-time join also prepares the local Codex connection.</p><div class="field"><label for="room-name">New room</label><input id="room-name" maxlength="64" placeholder="Project Aurora"></div><div class="detail-actions"><button id="create-room" class="secondary">Create room</button></div><div class="field"><label for="invite-input">Join with invite</label><input id="invite-input" placeholder="al1.…"></div><div class="field"><label for="join-name">Local bot name</label><input id="join-name" maxlength="64" placeholder="Research bot (first join only)"></div><div class="detail-actions"><button id="join-room" class="secondary">Join room</button></div><div id="room-msg" class="compose-note"></div><pre id="invite-code" class="code hidden"></pre><pre id="invite-brief" class="code hidden"></pre><div id="brief-actions" class="detail-actions hidden"><button id="copy-brief" class="secondary">Copy peer briefing</button></div></section>
+    <section class="detail-card"><h3>Incoming requests</h3><div id="policy-rows" class="rows"></div><div class="detail-actions"><button id="toggle-policy" class="secondary">Loading…</button></div><div id="policy-msg" class="compose-note"></div><div id="approvals"></div></section>
+    <section class="detail-card"><h3>Invites</h3><div id="invites" class="list"></div></section>
+    <section class="detail-card"><h3>Queue & activity</h3><div id="inbox" class="list"></div><div id="activity" class="list"></div></section>
+    <div class="skill-note"><span>✦</span><div><b>Agent routine enabled</b><br>Codex receives the AgentLink Messenger skill automatically during setup; MCP instructions guide other supported clients.</div></div>
+  </aside>
+</div>
 <script src="renderer.js"></script>
 </body>
 </html>

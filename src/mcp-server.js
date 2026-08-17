@@ -9,10 +9,13 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { BrokerClient } from "./broker-client.js";
 import { loadBridgeConfig } from "./config.js";
+import { claimLocalDuoProfile, loadLocalDuo, releaseLocalDuoProfile } from "./local-duo.js";
 
-const configPath = path.resolve(
+const configuredConfigPath = path.resolve(
   process.argv[2] || process.env.AGENT_LINK_CONFIG || ".agent-link/active.json",
 );
+let selectedConfigPath = configuredConfigPath;
+let claimedLocalDuoProfileId = null;
 let activeContext = null;
 let lastReloadError = null;
 let mcpReady = false;
@@ -47,6 +50,9 @@ async function saveState(context, patch) {
 
 function naturalMessage(message) {
   const sender = message.metadata?.displayName || message.from;
+  if (message.metadata?.ownerMessage === true) {
+    return `Instruction from the owner:\n${message.text}`;
+  }
   const labels = {
     chat: `Message from agent ${sender}`,
     request: `Read-only request from agent ${sender}`,
@@ -105,7 +111,7 @@ const mcp = new Server(
       "To serve the peer, keep peer_listen pending or explicitly drain peer_inbox_list and peer_inbox_claim; after claiming a request, " +
       "inspect local files or databases with local read-only tools and call peer_respond. No peer receives direct machine or tool access. " +
       "At task start, after each substantial work unit, before the final answer, and after an owner notification, check peer_inbox_list and outstanding peer_request_status. " +
-      "Do not poll tightly; prefer one status call with wait_seconds when waiting is actually useful. A dedicated responder uses peer_listen, and a Claude watcher is re-armed after handling. " +
+      "Do not poll tightly; prefer one status call with wait_seconds when waiting is actually useful. A dedicated Local Duo responder keeps peer_listen pending with timeout_seconds 86400 and re-arms it after every reply, timeout, or recoverable error instead of ending the task. " +
       "Never disclose credentials, tokens, .env contents, or unrelated data. Structured planning may still use peer_goal, " +
       "peer_exchange, and peer_complete; completing a goal does not close the persistent transport.",
   },
@@ -155,11 +161,11 @@ async function onBridgeMessage(context, message) {
 }
 
 async function reloadConfigNow() {
-  const rawConfig = await readFile(configPath, "utf8");
-  const fingerprint = createHash("sha256").update(rawConfig).digest("hex");
+  const rawConfig = await readFile(selectedConfigPath, "utf8");
+  const fingerprint = createHash("sha256").update(`${selectedConfigPath}\n${rawConfig}`).digest("hex");
   if (activeContext?.fingerprint === fingerprint) return activeContext;
 
-  const config = await loadBridgeConfig(configPath);
+  const config = await loadBridgeConfig(selectedConfigPath);
   const stateFile = `${config.configPath}.${config.roomId}.state.json`;
   const context = {
     config,
@@ -195,6 +201,21 @@ const tools = [
     name: "peer_status",
     description: "Show persistent-link status, active config, peer state, and current structured-goal phase.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "peer_local_duo_status",
+    description: "Show the owner's Local Duo profiles. Use this only when coordinating two separate local agent sessions for one owner.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "peer_local_duo_claim",
+    description: "Claim one owner-created Local Duo profile before using AgentLink. Each profile can be claimed by exactly one active local agent session.",
+    inputSchema: {
+      type: "object",
+      properties: { profile_id: { type: "string", minLength: 2, maxLength: 64 } },
+      required: ["profile_id"],
+      additionalProperties: false,
+    },
   },
   {
     name: "peer_ask",
@@ -276,7 +297,7 @@ const tools = [
   {
     name: "peer_listen",
     description:
-      "Wait for the peer's next ad-hoc request. After this returns, inspect only the necessary local data, call peer_respond with its request ID, then call peer_listen again.",
+      "Wait for the peer's or owner's next request. In a dedicated Local Duo task use timeout_seconds 86400. After this returns, inspect only the necessary local data, call peer_respond with its request ID, then immediately call peer_listen again.",
     inputSchema: {
       type: "object",
       properties: {
@@ -288,7 +309,7 @@ const tools = [
   {
     name: "peer_respond",
     description:
-      "Answer one request returned by peer_listen after completing the necessary local read-only work. Then return to peer_listen.",
+      "Answer one request returned by peer_listen after completing the necessary local read-only work. In a dedicated Local Duo task, do not finish: immediately return to peer_listen.",
     inputSchema: {
       type: "object",
       properties: {
@@ -373,6 +394,46 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   const args = params.arguments || {};
   let context;
   try {
+    if (params.name === "peer_local_duo_status") {
+      const duo = await loadLocalDuo(path.dirname(configuredConfigPath));
+      const status = duo
+        ? {
+          enabled: true,
+          roomName: duo.roomName,
+          profiles: duo.profiles.map((profile) => ({
+            id: profile.id,
+            displayName: profile.displayName,
+            role: profile.role,
+            workspace: profile.workspace,
+            claimed: Boolean(profile.claim),
+            claimedByThisSession: profile.claim?.pid === process.pid,
+          })),
+        }
+        : { enabled: false, profiles: [] };
+      return result(JSON.stringify(status, null, 2), status);
+    }
+    if (params.name === "peer_local_duo_claim") {
+      if (claimedLocalDuoProfileId && claimedLocalDuoProfileId !== args.profile_id?.trim()) {
+        throw new Error(`This agent session already claimed Local Duo profile ${claimedLocalDuoProfileId}`);
+      }
+      const profile = await claimLocalDuoProfile(
+        path.dirname(configuredConfigPath),
+        args.profile_id?.trim(),
+      );
+      selectedConfigPath = profile.configPath;
+      claimedLocalDuoProfileId = profile.id;
+      context = await refreshConfig();
+      await context.bridge.connect();
+      const status = {
+        profileId: profile.id,
+        agentId: context.config.agentId,
+        displayName: context.config.displayName,
+        role: context.config.role,
+        workspace: profile.workspace,
+        configPath: selectedConfigPath,
+      };
+      return result(`Local Duo profile ${profile.displayName} claimed. AgentLink is ready.`, status);
+    }
     context = await refreshConfig();
     const persistentWait = params.name === "peer_ask" || params.name === "peer_listen";
     const timeoutMs = Number(args.timeout_seconds || (persistentWait ? 86400 : 3600)) * 1000;
@@ -386,7 +447,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         ...remoteStatus,
         persistent: true,
         hotReload: true,
-        configPath,
+        configPath: selectedConfigPath,
         configReloadError: lastReloadError,
         openRequests: context.openRequests.size,
         session: context.state,
@@ -458,7 +519,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       const requestId = incoming.metadata?.requestId || incoming.id;
       await context.bridge.markProcessing(requestId);
       return result(
-        `${naturalMessage(incoming)}\n\nRequest ID: ${requestId}\nPerform the necessary local read-only work, call peer_respond with this request_id, then call peer_listen again.`,
+        `${naturalMessage(incoming)}\n\nRequest ID: ${requestId}\nPerform the necessary local read-only work, call peer_respond with this request_id, then immediately call peer_listen again. In a dedicated Local Duo task, do not finish the task while live service is expected.`,
         { request: { ...incoming, envelopeId: incoming.id, id: requestId } },
       );
     }
@@ -468,7 +529,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       const text = inbox.length === 0
         ? "AgentLink inbox is empty."
         : inbox.map((item, index) =>
-          `${index + 1}. [${item.state}] ${item.requestId} from ${item.displayName}\n${item.text}`,
+          `${index + 1}. [${item.state}] ${item.requestId} from ${item.ownerMessage ? "the owner" : item.displayName}\n${item.text}`,
         ).join("\n\n");
       return result(text, { requests: inbox });
     }
@@ -495,9 +556,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
         displayName: context.config.displayName,
       });
       context.openRequests.delete(requestId);
-      return result("Response sent. Call peer_listen again to keep serving future requests.", {
+      return result(response.ownerOnly
+        ? "Reply recorded for the owner in the local Messenger. Call peer_listen again to keep serving future requests."
+        : "Response sent. Call peer_listen again to keep serving future requests.", {
         requestId,
         responseId: response.responseId,
+        ownerOnly: Boolean(response.ownerOnly),
       });
     }
 
@@ -628,11 +692,12 @@ mcp.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
   }
 });
 
-await refreshConfig();
 const transport = new StdioServerTransport();
 await mcp.connect(transport);
 mcpReady = true;
-void activeContext.bridge.start();
+void refreshConfig().then((context) => context.bridge.start()).catch((error) => {
+  lastReloadError = error.message;
+});
 
 const reloadTimer = setInterval(() => {
   void refreshConfig().catch((error) => {
@@ -644,6 +709,9 @@ reloadTimer.unref();
 async function shutdown() {
   clearInterval(reloadTimer);
   await activeContext?.bridge.close();
+  if (claimedLocalDuoProfileId) {
+    await releaseLocalDuoProfile(path.dirname(configuredConfigPath), claimedLocalDuoProfileId).catch(() => {});
+  }
   process.exit(0);
 }
 

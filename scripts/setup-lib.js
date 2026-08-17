@@ -95,6 +95,7 @@ export async function writeParticipantConfig({
   displayName,
   role,
   channelMode = false,
+  activate = true,
 }) {
   validateAgentId(agentId);
   parseRoomCode(roomCode);
@@ -125,11 +126,10 @@ export async function writeParticipantConfig({
   await mkdir(configDir, { recursive: true });
   await writePrivateJson(configPath, config);
   await writePrivateJson(statePath, initialState);
-  const { activeConfigPath, activeStatePath } = await activateParticipantConfig({
-    configDir,
-    config,
-  });
-  return { config, configPath, statePath, activeConfigPath, activeStatePath };
+  const active = activate
+    ? await activateParticipantConfig({ configDir, config })
+    : { activeConfigPath: null, activeStatePath: null };
+  return { config, configPath, statePath, ...active };
 }
 
 export function installMcp({ rootDir, configPath, client }) {

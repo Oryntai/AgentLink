@@ -25,7 +25,10 @@ function workspaceFingerprint() {
 }
 
 export class BrokerClient extends EventEmitter {
-  constructor(config, { requiredMethods = CORE_BROKER_METHODS } = {}) {
+  constructor(config, {
+    requiredMethods = CORE_BROKER_METHODS,
+    clientType = process.env.AGENT_LINK_CLIENT_TYPE || "generic-mcp",
+  } = {}) {
     super();
     this.config = config;
     // Required methods are a frontend capability, not a global constant: a
@@ -41,8 +44,8 @@ export class BrokerClient extends EventEmitter {
     this.broker = null;
     this.frontend = {
       frontendId: randomUUID(),
-      taskId: process.env.AGENT_LINK_TASK_ID || `${process.env.AGENT_LINK_CLIENT_TYPE || "mcp"}-${process.pid}`,
-      clientType: process.env.AGENT_LINK_CLIENT_TYPE || "generic-mcp",
+      taskId: process.env.AGENT_LINK_TASK_ID || `${clientType}-${process.pid}`,
+      clientType,
       workspaceFingerprint: workspaceFingerprint(),
       tags: (process.env.AGENT_LINK_TAGS || "").split(",").map((item) => item.trim()).filter(Boolean),
       wakeMode: process.env.AGENT_LINK_WAKE_MODE || "blocking_tool",
@@ -395,6 +398,10 @@ export class BrokerClient extends EventEmitter {
     return this.call("request_send", { question, ...options });
   }
 
+  ownerRequestSend(question, options = {}) {
+    return this.call("owner_request_send", { question, ...options });
+  }
+
   requestStatus(options = {}) {
     return this.call("request_status", options, {
       timeoutMs: options.waitMs ? options.waitMs + 5_000 : 10_000,
@@ -459,6 +466,10 @@ export class BrokerClient extends EventEmitter {
 
   listConversations() {
     return this.call("conversation_list");
+  }
+
+  listTranscript(options = {}) {
+    return this.call("transcript_list", options);
   }
 
   claimInbox(requestId) {

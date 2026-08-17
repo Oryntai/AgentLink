@@ -36,6 +36,23 @@ try {
   const codexConfig = await readFile(path.join(codexHome, "config.toml"), "utf8");
   assert.match(codexConfig, /active\.json/);
   assert.equal((codexConfig.match(/\[mcp_servers\.agent-link\]/g) || []).length, 1);
+  const skill = await readFile(path.join(codexHome, "skills", "agentlink-messenger", "SKILL.md"), "utf8");
+  assert.match(skill, /persistent, encrypted two-agent messenger/);
+
+  const bootstrapHome = path.join(tempDir, "bootstrap-codex-home");
+  const bootstrapPath = path.join(tempDir, "local-duo", "active.json");
+  const bootstrap = execFileSync(process.execPath, [
+    path.join(rootDir, "scripts", "install-mcp.js"),
+    "--config", bootstrapPath,
+    "--client", "codex",
+    "--bootstrap",
+  ], {
+    cwd: rootDir,
+    env: { ...process.env, CODEX_HOME: bootstrapHome },
+    encoding: "utf8",
+  });
+  assert.match(bootstrap, /Permanent Codex MCP installed/);
+  assert.match(await readFile(path.join(bootstrapHome, "config.toml"), "utf8"), /local-duo/);
   console.log("INSTALL PASS: permanent MCP install is idempotent and targets active.json");
 } finally {
   await rm(tempDir, { recursive: true, force: true });

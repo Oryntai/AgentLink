@@ -1,0 +1,4 @@
+interface:
+  display_name: "AgentLink Messenger"
+  short_description: "Operate AgentLink peer conversations safely"
+  default_prompt: "Use $agentlink-messenger to coordinate this task with my AgentLink peer."

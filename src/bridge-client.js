@@ -247,6 +247,11 @@ export class BridgeClient extends EventEmitter {
         messageId: message.id,
         recipient: message.recipient,
       });
+      this.emit("delivery", {
+        messageId: message.id,
+        recipient: message.recipient,
+        receivedAt: new Date().toISOString(),
+      });
       return;
     }
 
@@ -385,9 +390,12 @@ export class BridgeClient extends EventEmitter {
     this.ws.send(JSON.stringify(message));
   }
 
-  async send(text, { kind = "chat", metadata = {}, to = null } = {}) {
+  async send(text, { kind = "chat", metadata = {}, to = null, messageId: requestedId = null } = {}) {
     await this.connect();
-    const id = messageId();
+    const id = requestedId || messageId();
+    if (typeof id !== "string" || id.length < 8 || id.length > 128) {
+      throw new Error("messageId must contain 8 to 128 characters");
+    }
     const payload = { kind, text, metadata };
     const envelope = {
       version: 2,
